@@ -1,7 +1,10 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::schema::{kv_transactions, tx_affected_objects, tx_balance_changes};
+use crate::schema::{
+    kv_transactions, tx_affected_addresses, tx_affected_objects, tx_balance_changes,
+    tx_calls_fun, tx_calls_mod, tx_calls_pkg, tx_digests, tx_kinds,
+};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use sui_types::object::Owner;
@@ -45,4 +48,53 @@ pub struct StoredTxAffectedObject {
 pub struct StoredTxBalanceChange {
     pub tx_sequence_number: i64,
     pub balance_changes: Vec<u8>,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = tx_affected_addresses)]
+pub struct StoredTxAffectedAddress {
+    pub tx_sequence_number: i64,
+    pub affected: Vec<u8>,
+    pub sender: Vec<u8>,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = tx_calls_pkg)]
+pub struct StoredTxCallsPkg {
+    pub tx_sequence_number: i64,
+    pub package: Vec<u8>,
+    pub sender: Vec<u8>,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = tx_calls_mod)]
+pub struct StoredTxCallsMod {
+    pub tx_sequence_number: i64,
+    pub package: Vec<u8>,
+    pub module: String,
+    pub sender: Vec<u8>,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = tx_calls_fun)]
+pub struct StoredTxCallsFun {
+    pub tx_sequence_number: i64,
+    pub package: Vec<u8>,
+    pub module: String,
+    pub func: String,
+    pub sender: Vec<u8>,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = tx_digests)]
+pub struct StoredTxDigest {
+    pub tx_digest: Vec<u8>,
+    pub tx_sequence_number: i64,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = tx_kinds)]
+pub struct StoredTxKind {
+    pub tx_sequence_number: i64,
+    pub tx_kind: i16,
 }

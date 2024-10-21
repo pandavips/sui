@@ -876,7 +876,7 @@ impl Core {
                     .filter(|ancestor| ancestor.author() != self.context.own_index)
                     .flat_map(|ancestor| {
 
-                        let ancestor_state = ancestor_state_map.get(&ancestor.author()).unwrap_or_else(|| panic!("Should have ancestor state for {}", ancestor.author()));
+                        let ancestor_state = ancestor_state_map[ancestor.author()];
 
                         match ancestor_state {
                             AncestorState::Include => {
@@ -884,7 +884,7 @@ impl Core {
                             }
                             AncestorState::Exclude(score) => {
                                 debug!("Added ancestor {ancestor} with EXCLUDE state with score {score} to temporary excluded ancestors for round {clock_round}");
-                                temp_excluded_ancestors.push((*score, ancestor));
+                                temp_excluded_ancestors.push((score, ancestor));
                                 return None;
                             }
                         }

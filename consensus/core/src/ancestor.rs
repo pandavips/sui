@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use consensus_config::AuthorityIndex;
 use tracing::info;
@@ -13,6 +13,8 @@ pub(crate) enum AncestorState {
     Include,
     Exclude(u64),
 }
+
+#[derive(Clone)]
 struct AncestorInfo {
     state: AncestorState,
     // This will be set to the count of either the quorum round update count or
@@ -40,10 +42,6 @@ impl AncestorInfo {
         }
     }
 
-    fn reset_lock(&mut self) {
-        self.lock_expiry_count = 0;
-    }
-
     fn set_lock(&mut self, future_count: u32) {
         self.lock_expiry_count = future_count;
     }
@@ -51,7 +49,7 @@ impl AncestorInfo {
 
 pub(crate) struct AncestorStateManager {
     context: Arc<Context>,
-    state_map: HashMap<AuthorityIndex, AncestorInfo>,
+    state_map: Vec<AncestorInfo>,
     propagation_score_update_count: u32,
     quorum_round_update_count: u32,
     pub(crate) quorum_round_per_authority: Vec<QuorumRound>,
@@ -78,10 +76,7 @@ impl AncestorStateManager {
     const EXCLUSION_THRESHOLD_PERCENTAGE: u64 = 10;
 
     pub(crate) fn new(context: Arc<Context>, propagation_scores: ReputationScores) -> Self {
-        let mut state_map = HashMap::new();
-        for (id, _) in context.committee.authorities() {
-            state_map.insert(id, AncestorInfo::new());
-        }
+        let state_map = vec![AncestorInfo::new(); context.committee.size()];
 
         let quorum_round_per_authority = vec![(0, 0); context.committee.size()];
         Self {
@@ -104,19 +99,12 @@ impl AncestorStateManager {
         self.propagation_score_update_count += 1;
     }
 
-    pub(crate) fn get_ancestor_states(&self) -> HashMap<AuthorityIndex, AncestorState> {
-        self.state_map
-            .iter()
-            .map(|(&id, info)| (id, info.state))
-            .collect()
+    pub(crate) fn get_ancestor_states(&self) -> Vec<AncestorState> {
+        self.state_map.iter().map(|info| info.state).collect()
     }
 
     /// Updates the state of all ancestors based on the latest scores and quorum rounds
     pub(crate) fn update_all_ancestors_state(&mut self) {
-        // If round prober has not run yet and we don't have network quorum round,
-        // it is okay because network_low_quorum_round will be zero and we will
-        // include all ancestors until we get more information.
-        let network_low_quorum_round = self.calculate_network_low_quorum_round();
         let propagation_scores_by_authority = self
             .propagation_scores
             .scores_per_authority
@@ -133,6 +121,11 @@ impl AncestorStateManager {
                 )
             })
             .collect::<Vec<_>>();
+
+        // If round prober has not run yet and we don't have network quorum round,
+        // it is okay because network_low_quorum_round will be zero and we will
+        // include all ancestors until we get more information.
+        let network_low_quorum_round = self.calculate_network_low_quorum_round();
 
         // If propagation scores are not ready because the first 300 commits have not
         // happened, this is okay as we will only start excluding ancestors after that
@@ -158,9 +151,7 @@ impl AncestorStateManager {
         network_low_quorum_round: u32,
     ) {
         let block_hostname = &self.context.committee.authority(authority_id).hostname;
-        let ancestor_info = self.state_map.get_mut(&authority_id).unwrap_or_else(|| {
-            panic!("Expected authority_id {authority_id} to be initialized in state_map")
-        });
+        let mut ancestor_info = self.state_map[authority_id].clone();
 
         if ancestor_info.is_locked(
             self.propagation_score_update_count,
@@ -168,8 +159,6 @@ impl AncestorStateManager {
         ) {
             // If still locked, we won't make any state changes.
             return;
-        } else {
-            ancestor_info.reset_lock();
         }
 
         let low_score_threshold =
@@ -219,6 +208,9 @@ impl AncestorStateManager {
                 }
             }
         }
+
+        // If any updates were made to state ensure they are persisted.
+        self.state_map[authority_id] = ancestor_info;
     }
 
     /// Calculate the network's low quorum round from 2f+1 authorities by stake,
@@ -278,7 +270,7 @@ mod test {
 
     // Test all state transitions
     // Default all INCLUDE -> EXCLUDE
-    // EXCLUDE -> INCLUDE (BLocked due to lock)
+    // EXCLUDE -> INCLUDE (Blocked due to lock)
     // EXCLUDE -> INCLUDE (Pass due to lock expired)
     // INCLUDE -> EXCLUDE (Blocked due to lock)
     // INCLUDE -> EXCLUDE (Pass due to lock expired)
@@ -297,7 +289,7 @@ mod test {
         // Score threshold for exclude is (4 * 10) / 100 = 0
         // No ancestors should be excluded in with this threshold
         let state_map = ancestor_state_manager.get_ancestor_states();
-        for state in state_map.values() {
+        for state in state_map.iter() {
             assert_eq!(*state, AncestorState::Include);
         }
 
@@ -308,11 +300,11 @@ mod test {
         // Score threshold for exclude is (100 * 10) / 100 = 10
         // 2 authorities should be excluded in with this threshold
         let state_map = ancestor_state_manager.get_ancestor_states();
-        for (authority, state) in state_map {
-            if (0..=1).contains(&authority.value()) {
-                assert_eq!(state, AncestorState::Exclude(10));
+        for (authority, state) in state_map.iter().enumerate() {
+            if (0..=1).contains(&authority) {
+                assert_eq!(*state, AncestorState::Exclude(10));
             } else {
-                assert_eq!(state, AncestorState::Include);
+                assert_eq!(*state, AncestorState::Include);
             }
         }
 
@@ -321,11 +313,11 @@ mod test {
         // 2 authorities should still be excluded with these scores and no new
         // quorum round updates have been set to expire the locks.
         let state_map = ancestor_state_manager.get_ancestor_states();
-        for (authority, state) in state_map {
-            if (0..=1).contains(&authority.value()) {
-                assert_eq!(state, AncestorState::Exclude(10));
+        for (authority, state) in state_map.iter().enumerate() {
+            if (0..=1).contains(&authority) {
+                assert_eq!(*state, AncestorState::Exclude(10));
             } else {
-                assert_eq!(state, AncestorState::Include);
+                assert_eq!(*state, AncestorState::Include);
             }
         }
 
@@ -339,11 +331,11 @@ mod test {
         // at the network low quorum round of 229. Authority 1's quorum round is
         // too low and will remain excluded.
         let state_map = ancestor_state_manager.get_ancestor_states();
-        for (authority, state) in state_map {
-            if authority.value() == 1 {
-                assert_eq!(state, AncestorState::Exclude(10));
+        for (authority, state) in state_map.iter().enumerate() {
+            if authority == 1 {
+                assert_eq!(*state, AncestorState::Exclude(10));
             } else {
-                assert_eq!(state, AncestorState::Include);
+                assert_eq!(*state, AncestorState::Include);
             }
         }
 
@@ -356,8 +348,8 @@ mod test {
         // even though the scores are still low it has not moved to the EXCLUDE
         // state.
         let state_map = ancestor_state_manager.get_ancestor_states();
-        for (_, state) in state_map {
-            assert_eq!(state, AncestorState::Include);
+        for state in state_map.iter() {
+            assert_eq!(*state, AncestorState::Include);
         }
 
         // Updating the scores will expire the lock as we only need 1 update for tests.
@@ -368,11 +360,11 @@ mod test {
         // Ancestor 1 can transition to EXCLUDE state now that the lock expired
         // and its scores are below the threshold.
         let state_map = ancestor_state_manager.get_ancestor_states();
-        for (authority, state) in state_map {
-            if authority.value() == 1 {
-                assert_eq!(state, AncestorState::Exclude(10));
+        for (authority, state) in state_map.iter().enumerate() {
+            if authority == 1 {
+                assert_eq!(*state, AncestorState::Exclude(10));
             } else {
-                assert_eq!(state, AncestorState::Include);
+                assert_eq!(*state, AncestorState::Include);
             }
         }
     }

@@ -458,7 +458,6 @@ mod test {
     async fn test_round_prober() {
         const NUM_AUTHORITIES: usize = 7;
         let context = Arc::new(Context::new_for_test(NUM_AUTHORITIES).0);
-        let last_proposed_round = 110;
         let core_thread_dispatcher = Arc::new(FakeThreadDispatcher::new(vec![
             110, 120, 130, 140, 150, 160, 170,
         ]));
@@ -482,7 +481,7 @@ mod test {
         );
 
         // Fake last proposed round to be 110.
-        let block = VerifiedBlock::new_for_test(TestBlock::new(last_proposed_round, 0).build());
+        let block = VerifiedBlock::new_for_test(TestBlock::new(110, 0).build());
         dag_state.write().accept_block(block);
 
         // Compute quorum rounds and propagation delay based on last proposed round = 110,

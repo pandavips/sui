@@ -54,4 +54,3 @@ impl Handler for TxDigests {
             .await?)
     }
 }
-

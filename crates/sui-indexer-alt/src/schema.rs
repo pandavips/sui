@@ -83,23 +83,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    tx_calls_mod (package, module, tx_sequence_number) {
-        tx_sequence_number -> Int8,
-        package -> Bytea,
-        module -> Text,
-        sender -> Bytea,
-    }
-}
-
-diesel::table! {
-    tx_calls_pkg (package, tx_sequence_number) {
-        tx_sequence_number -> Int8,
-        package -> Bytea,
-        sender -> Bytea,
-    }
-}
-
-diesel::table! {
     tx_digests (tx_digest) {
         tx_digest -> Bytea,
         tx_sequence_number -> Int8,
@@ -136,8 +119,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     tx_affected_objects,
     tx_balance_changes,
     tx_calls_fun,
-    tx_calls_mod,
-    tx_calls_pkg,
     tx_digests,
     tx_kinds,
     watermarks,

@@ -15,11 +15,9 @@ pub mod kv_transactions;
 pub mod tx_affected_addresses;
 pub mod tx_affected_objects;
 pub mod tx_balance_changes;
+pub mod tx_calls_fun;
 pub mod tx_digests;
 pub mod tx_kinds;
-pub mod tx_calls_pkg;
-pub mod tx_calls_mod;
-
 
 /// Handlers implement the logic for a given indexing pipeline: How to process checkpoint data into
 /// rows for their table, and how to write those rows to the database.

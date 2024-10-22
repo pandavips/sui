@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use diesel_async::RunQueryDsl;
-use sui_types::{base_types::SuiAddress, full_checkpoint_content::CheckpointData, object::Owner};
 use itertools::Itertools;
+use sui_types::{base_types::SuiAddress, full_checkpoint_content::CheckpointData, object::Owner};
 
 use crate::{db, models::transactions::StoredTxAffectedAddress, schema::tx_affected_addresses};
 
@@ -38,7 +38,8 @@ impl Handler for TxAffectedAddress {
             let tx_sequence_number = (first_tx + i) as i64;
             let sender = tx.transaction.sender_address();
             let payer = tx.transaction.gas_owner();
-            let recipients: Vec<SuiAddress> = tx.effects
+            let recipients: Vec<SuiAddress> = tx
+                .effects
                 .all_changed_objects()
                 .into_iter()
                 .filter_map(|(_object_ref, owner, _write_kind)| match owner {
@@ -48,13 +49,16 @@ impl Handler for TxAffectedAddress {
                 .unique()
                 .collect();
 
-            let affected_addresses: Vec<StoredTxAffectedAddress> = recipients.into_iter().chain(vec![sender, payer]).unique().map(
-                |a| StoredTxAffectedAddress {
+            let affected_addresses: Vec<StoredTxAffectedAddress> = recipients
+                .into_iter()
+                .chain(vec![sender, payer])
+                .unique()
+                .map(|a| StoredTxAffectedAddress {
                     tx_sequence_number,
                     affected: a.to_vec(),
                     sender: sender.to_vec(),
-                }
-            ).collect();
+                })
+                .collect();
             values.extend(affected_addresses);
         }
 
@@ -69,5 +73,3 @@ impl Handler for TxAffectedAddress {
             .await?)
     }
 }
-
-

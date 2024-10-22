@@ -8,8 +8,9 @@ use sui_indexer_alt::{
     handlers::{
         ev_emit_mod::EvEmitMod, ev_struct_inst::EvStructInst, kv_checkpoints::KvCheckpoints,
         kv_objects::KvObjects, kv_transactions::KvTransactions,
-        tx_affected_objects::TxAffectedObjects, tx_balance_changes::TxBalanceChanges,
-        tx_affected_addresses::TxAffectedAddress, tx_kinds::TxKinds, tx_digests::TxDigests,
+        tx_affected_addresses::TxAffectedAddress, tx_affected_objects::TxAffectedObjects,
+        tx_balance_changes::TxBalanceChanges, tx_calls_fun::TxCallsFun, tx_digests::TxDigests,
+        tx_kinds::TxKinds,
     },
     Indexer,
 };
@@ -38,6 +39,7 @@ async fn main() -> Result<()> {
     indexer.concurrent_pipeline::<TxAffectedAddress>().await?;
     indexer.concurrent_pipeline::<TxKinds>().await?;
     indexer.concurrent_pipeline::<TxDigests>().await?;
+    indexer.concurrent_pipeline::<TxCallsFun>().await?;
 
     let h_indexer = indexer.run().await.context("Failed to start indexer")?;
 

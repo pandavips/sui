@@ -464,7 +464,7 @@ impl NodeMetrics {
             ).unwrap(),
             included_excluded_proposal_ancestors_count_by_authority: register_int_counter_vec_with_registry!(
                 "included_excluded_proposal_ancestors_count_by_authority",
-                "Total number of included excluded ancestors per authority during proposal. Either weak or strong type",
+                "Total number of ancestors per authority with 'excluded' status that got included in proposal. Either weak or strong type.",
                 &["authority", "type"],
                 registry,
             ).unwrap(),

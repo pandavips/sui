@@ -12,7 +12,10 @@ use mysten_metrics::monitored_mpsc::UnboundedReceiver;
 use mysten_metrics::monitored_scope;
 use parking_lot::RwLock;
 use sui_macros::fail_point;
-use tokio::sync::{broadcast, watch};
+use tokio::{
+    sync::{broadcast, watch},
+    time::Instant,
+};
 use tracing::{debug, info, warn};
 
 use crate::{
@@ -96,7 +99,10 @@ pub(crate) struct Core {
     /// This is currently being used to avoid equivocations during a node recovering from amnesia. When value is None it means that
     /// the last block sync mechanism is enabled, but it hasn't been initialised yet.
     last_known_proposed_round: Option<Round>,
-
+    // The ancestor state manager will keep track of the quality of the authorities
+    // based on the distribution of their blocks to the network. It will use this
+    // information to decide whether to include that authority block in the next
+    // proposal or not.
     ancestor_state_manager: AncestorStateManager,
 }
 
@@ -284,34 +290,11 @@ impl Core {
     /// Adds/processed all the newly `accepted_blocks`. We basically try to move the threshold clock and add them to the
     /// pending ancestors list.
     fn add_accepted_blocks(&mut self, accepted_blocks: Vec<VerifiedBlock>) {
-        // Get max round of accepted blocks. This will be equal to the threshold
-        // clock round, either by advancing the threshold clock round by being
-        // greater than current clock round or by equaling the current clock round.
-        let max_accepted_round = accepted_blocks
-            .iter()
-            .map(|b| b.round())
-            .max()
-            .unwrap_or(GENESIS_ROUND);
-        // Therefore the leader round for which proposals will wait will be max accepted round - 1
-        // or saturate to GENESIS_ROUND.
-        let accepted_proposal_leader_round = max_accepted_round.saturating_sub(1);
-
-        // Ignore checking for leader blocks with rounds less than the current
-        // threshold clock round - 1.
-        let proposal_leaders_exist = if accepted_proposal_leader_round
-            >= self.threshold_clock.get_round().saturating_sub(1)
+        // Advance the threshold clock. If advanced to a new round then send a signal that a new quorum has been received.
+        if let Some(new_round) = self
+            .threshold_clock
+            .add_blocks(accepted_blocks.iter().map(|b| b.reference()).collect())
         {
-            self.leaders_exist(accepted_proposal_leader_round)
-        } else {
-            false
-        };
-
-        // Advance the threshold clock. If advanced to a new round then send a
-        // signal that a new quorum has been received.
-        if let Some(new_round) = self.threshold_clock.add_blocks(
-            accepted_blocks.iter().map(|b| b.reference()).collect(),
-            proposal_leaders_exist,
-        ) {
             // notify that threshold clock advanced to new round
             self.signals.new_round(new_round);
         }
@@ -383,23 +366,10 @@ impl Core {
         // There must be a quorum of blocks from the previous round.
         let quorum_round = self.threshold_clock.get_round().saturating_sub(1);
 
-        let leader_authority = self
-            .context
-            .committee
-            .authority(self.first_leader(quorum_round))
-            .hostname
-            .clone();
-
         // Create a new block either because we want to "forcefully" propose a block due to a leader timeout,
         // or because we are actually ready to produce the block (leader exists and min delay has passed).
         if !force {
             if !self.leaders_exist(quorum_round) {
-                self.context
-                    .metrics
-                    .node_metrics
-                    .block_proposal_leader_wait_count
-                    .with_label_values(&[&leader_authority])
-                    .inc();
                 return None;
             }
 
@@ -426,6 +396,10 @@ impl Core {
             .context
             .protocol_config
             .consensus_distributed_vote_scoring_strategy()
+            && self
+                .context
+                .protocol_config
+                .consensus_smart_ancestor_selection()
         {
             let ancestors = self.smart_ancestors_to_propose(clock_round, !force);
 
@@ -442,18 +416,27 @@ impl Core {
             self.ancestors_to_propose(clock_round)
         };
 
-        if let Some(leader_ts) = self.threshold_clock.get_proposal_leaders_ts() {
-            self.context
-                .metrics
-                .node_metrics
-                .block_proposal_leader_wait_ms
-                .with_label_values(&[&leader_authority])
-                .inc_by(
-                    leader_ts
-                        .saturating_duration_since(self.threshold_clock.get_quorum_ts())
-                        .as_millis() as u64,
-                );
-        }
+        let leader_authority = &self
+            .context
+            .committee
+            .authority(self.first_leader(quorum_round))
+            .hostname;
+        self.context
+            .metrics
+            .node_metrics
+            .block_proposal_leader_wait_ms
+            .with_label_values(&[leader_authority])
+            .inc_by(
+                Instant::now()
+                    .saturating_duration_since(self.threshold_clock.get_quorum_ts())
+                    .as_millis() as u64,
+            );
+        self.context
+            .metrics
+            .node_metrics
+            .block_proposal_leader_wait_count
+            .with_label_values(&[leader_authority])
+            .inc();
 
         self.context
             .metrics
@@ -910,6 +893,7 @@ impl Core {
         }
 
         if smart_select && !parent_round_quorum.reached_threshold(&self.context.committee) {
+            tracing::error!("code_cov-5");
             self.context.metrics.node_metrics.smart_selection_wait.inc();
             debug!("Only found {} stake of good ancestors to include for round {clock_round}, will wait for more.", parent_round_quorum.stake());
             return vec![];
@@ -933,6 +917,7 @@ impl Core {
             if !parent_round_quorum.reached_threshold(&self.context.committee)
                 && ancestor.round() == quorum_round
             {
+                tracing::error!("code_cov-6");
                 debug!("Including temporarily excluded strong link ancestor {ancestor} with score {score} to propose for round {clock_round}");
                 parent_round_quorum.add(ancestor.author(), &self.context.committee);
                 self.last_included_ancestors[ancestor.author()] = Some(ancestor.reference());
@@ -979,6 +964,7 @@ impl Core {
                     network_low_quorum_round + 1,
                 )
             {
+                tracing::error!("code_cov-8");
                 // Include the ancestor block as it has been seen by a strong quorum
                 self.last_included_ancestors[excluded_author] =
                     Some(last_cached_block_in_range.reference());

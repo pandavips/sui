@@ -511,8 +511,7 @@ impl DagState {
     /// Returns the last block cached per authority with `round < end_round`.
     /// The method is guaranteed to return results only when the `end_round` is not earlier of the
     /// available cached data for each authority, otherwise the method will panic - it's the caller's
-    /// responsibility to ensure that is not requesting filtering for earlier rounds .
-    /// In case of equivocation for an authority's last slot only one block will be returned (the last in order).
+    /// responsibility to ensure that is not requesting filtering for earlier rounds.
     pub(crate) fn get_last_cached_block_per_authority(
         &self,
         end_round: Round,
@@ -534,6 +533,11 @@ impl DagState {
             .collect()
     }
 
+    /// Returns the last block cached per authority within `start_round <= round < end_round`.
+    /// The method is not guranteed to return a block for the authority as None can
+    /// be returned if the authority cached blocks are outside of the range provided.
+    /// In case of equivocation for an authority's last slot only one block will be
+    /// returned (the last in order).
     fn get_last_cached_blocks_per_authority_in_range(
         &self,
         start_round: u32,
@@ -567,11 +571,10 @@ impl DagState {
 
             // If the last evicted round is after the start round, start from the
             // last evicted round + 1.
-            let first_included_round = start_round.max(last_evicted_round + 1);
+            let first_available_round = start_round.max(last_evicted_round + 1);
 
-            if end_round.saturating_sub(1) <= last_evicted_round || first_included_round > end_round
-            {
-                debug!("Attempted to request for blocks of rounds < {end_round}, when the last evicted round is {last_evicted_round} and the first included round is {first_included_round} for authority {authority_index}");
+            if first_available_round >= end_round {
+                debug!("Attempted to request for blocks of rounds < {end_round}, when the last evicted round is {last_evicted_round} and the first available round is {first_available_round} for authority {authority_index}");
                 blocks[authority_index] = None;
                 continue;
             }
@@ -579,7 +582,7 @@ impl DagState {
             if let Some(block_ref) = block_refs
                 .range((
                     Included(BlockRef::new(
-                        first_included_round,
+                        first_available_round,
                         authority_index,
                         BlockDigest::MIN,
                     )),
@@ -2046,6 +2049,18 @@ mod test {
 
         // AND we request blocks between rounds (3..3)
         let start_round = 3;
+        let end_round = 3;
+        let last_block = dag_state.get_last_cached_block_for_authority_in_range(
+            AuthorityIndex::new_for_test(3),
+            start_round,
+            end_round,
+        );
+
+        // THEN we hit the case where block is not found
+        assert!(last_block.is_none());
+
+        // AND we request blocks between intentionally incorrect rounds (4..3)
+        let start_round = 4;
         let end_round = 3;
         let last_block = dag_state.get_last_cached_block_for_authority_in_range(
             AuthorityIndex::new_for_test(3),

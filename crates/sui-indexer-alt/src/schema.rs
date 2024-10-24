@@ -51,8 +51,8 @@ diesel::table! {
 
 diesel::table! {
     tx_affected_addresses (affected, tx_sequence_number) {
-        tx_sequence_number -> Int8,
         affected -> Bytea,
+        tx_sequence_number -> Int8,
         sender -> Bytea,
     }
 }
@@ -74,10 +74,10 @@ diesel::table! {
 
 diesel::table! {
     tx_calls_fun (package, module, func, tx_sequence_number) {
-        tx_sequence_number -> Int8,
         package -> Bytea,
         module -> Text,
         func -> Text,
+        tx_sequence_number -> Int8,
         sender -> Bytea,
     }
 }
@@ -91,8 +91,8 @@ diesel::table! {
 
 diesel::table! {
     tx_kinds (tx_kind, tx_sequence_number) {
-        tx_sequence_number -> Int8,
         tx_kind -> Int2,
+        tx_sequence_number -> Int8,
     }
 }
 

@@ -266,9 +266,9 @@ fn compute_quorum_round(
     let mut total_stake = 0;
     let mut low = 0;
     for (round, stake) in rounds_with_stake.iter().rev() {
-        let reached_quorum_before = total_stake >= committee.quorum_threshold();
+        let reached_quorum_before = total_stake >= committee.n_percent_stake_threshold(90);
         total_stake += stake;
-        if !reached_quorum_before && total_stake >= committee.quorum_threshold() {
+        if !reached_quorum_before && total_stake >= committee.n_percent_stake_threshold(90) {
             low = *round;
             break;
         }
@@ -499,31 +499,31 @@ mod test {
         assert_eq!(
             quorum_rounds,
             vec![
-                (100, 105),
+                (0, 105),
                 (0, 115),
-                (103, 130),
+                (0, 130),
                 (0, 0),
-                (105, 150),
-                (106, 160),
-                (107, 170)
+                (0, 150),
+                (0, 160),
+                (0, 170)
             ]
         );
 
         assert_eq!(
             core_thread_dispatcher.quorum_rounds(),
             vec![
-                (100, 105),
+                (0, 105),
                 (0, 115),
-                (103, 130),
+                (0, 130),
                 (0, 0),
-                (105, 150),
-                (106, 160),
-                (107, 170)
+                (0, 150),
+                (0, 160),
+                (0, 170)
             ]
         );
         // 110 - 100 = 10
-        assert_eq!(propagation_delay, 10);
-        assert_eq!(core_thread_dispatcher.propagation_delay(), 10);
+        assert_eq!(propagation_delay, 110);
+        assert_eq!(core_thread_dispatcher.propagation_delay(), 110);
     }
 
     #[tokio::test]

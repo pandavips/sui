@@ -729,51 +729,6 @@ impl AuthorityEpochTables {
         Ok(())
     }
 
-    // TODO(quarantine)
-    pub fn load_initial_object_debts(
-        &self,
-        current_round: Round,
-        for_randomness: bool,
-        per_commit_budget: u64,
-        transactions: &[VerifiedSequencedConsensusTransaction],
-    ) -> SuiResult<impl IntoIterator<Item = (ObjectID, u64)>> {
-        let table = if for_randomness {
-            &self.congestion_control_randomness_object_debts
-        } else {
-            &self.congestion_control_object_debts
-        };
-        let shared_input_object_ids: BTreeSet<_> = transactions
-            .iter()
-            .filter_map(|tx| {
-                if let SequencedConsensusTransactionKind::External(ConsensusTransaction {
-                    kind: ConsensusTransactionKind::CertifiedTransaction(tx),
-                    ..
-                }) = &tx.0.transaction
-                {
-                    Some(tx.shared_input_objects().map(|obj| obj.id))
-                } else {
-                    None
-                }
-            })
-            .flatten()
-            .collect();
-        Ok(table
-            .multi_get(shared_input_object_ids.iter())?
-            .into_iter()
-            .flatten()
-            .zip(shared_input_object_ids)
-            .map(move |(debt, object_id)| {
-                let (round, debt) = debt.into_v1();
-                (
-                    object_id,
-                    // Stored debts already account for the budget of the round in which
-                    // they were accumulated. Application of budget from future rounds to
-                    // the debt is handled here.
-                    debt.saturating_sub(per_commit_budget * (current_round - round - 1)),
-                )
-            }))
-    }
-
     fn get_all_deferred_transactions(
         &self,
     ) -> SuiResult<BTreeMap<DeferralKey, Vec<VerifiedSequencedConsensusTransaction>>> {
@@ -2868,7 +2823,7 @@ impl AuthorityPerEpochStore {
             .max_txn_cost_overage_per_object_in_commit_as_option()
             .unwrap_or(0);
         let shared_object_congestion_tracker = SharedObjectCongestionTracker::new(
-            tables.load_initial_object_debts(
+            self.consensus_quarantine.read().load_initial_object_debts(
                 consensus_commit_info.round,
                 false,
                 per_commit_budget,
@@ -4303,8 +4258,9 @@ mod quarantine {
 
         // The most recent congestion control debts for objects. Uses a ref-count to track
         // which objects still exist in some element of output_queue.
-        congestion_control_randomness_object_debts: RefCountedHashMap<ObjectID, u64>,
-        congestion_control_object_debts: RefCountedHashMap<ObjectID, u64>,
+        congestion_control_randomness_object_debts:
+            RefCountedHashMap<ObjectID, CongestionPerObjectDebt>,
+        congestion_control_object_debts: RefCountedHashMap<ObjectID, CongestionPerObjectDebt>,
     }
 
     impl ConsensusOutputQuarantine {
@@ -4315,9 +4271,9 @@ mod quarantine {
                 output_queue: VecDeque::new(),
                 builder_checkpoint_summary: BTreeMap::new(),
                 builder_digest_to_checkpoint: HashMap::new(),
-                shared_object_next_versions: Default::default(),
-                congestion_control_randomness_object_debts: Default::default(),
-                congestion_control_object_debts: Default::default(),
+                shared_object_next_versions: RefCountedHashMap::new(),
+                congestion_control_randomness_object_debts: RefCountedHashMap::new(),
+                congestion_control_object_debts: RefCountedHashMap::new(),
             }
         }
     }
@@ -4549,12 +4505,20 @@ mod quarantine {
         }
 
         fn insert_congestion_control_debts(&mut self, output: &ConsensusCommitOutput) {
+            let current_round = output.consensus_round;
+
             for (object_id, debt) in output.congestion_control_object_debts.iter() {
-                self.congestion_control_object_debts.insert(*object_id, *debt);
+                self.congestion_control_object_debts.insert(
+                    *object_id,
+                    CongestionPerObjectDebt::new(current_round, *debt),
+                );
             }
 
             for (object_id, debt) in output.congestion_control_randomness_object_debts.iter() {
-                self.congestion_control_randomness_object_debts.insert(*object_id, *debt);
+                self.congestion_control_randomness_object_debts.insert(
+                    *object_id,
+                    CongestionPerObjectDebt::new(current_round, *debt),
+                );
             }
         }
 
@@ -4676,9 +4640,15 @@ mod quarantine {
         ) -> SuiResult<impl IntoIterator<Item = (ObjectID, u64)>> {
             let tables = epoch_store.tables()?;
             let (hash_table, db_table) = if for_randomness {
-                (&self.congestion_control_randomness_object_debts, &tables.congestion_control_randomness_object_debts)
+                (
+                    &self.congestion_control_randomness_object_debts,
+                    &tables.congestion_control_randomness_object_debts,
+                )
             } else {
-                (&self.congestion_control_object_debts, &tables.congestion_control_object_debts)
+                (
+                    &self.congestion_control_object_debts,
+                    &tables.congestion_control_object_debts,
+                )
             };
             let shared_input_object_ids: BTreeSet<_> = transactions
                 .iter()
@@ -4703,7 +4673,7 @@ mod quarantine {
 
             for (i, object_id) in shared_input_object_ids.iter().enumerate() {
                 if let Some(debt) = hash_table.get(object_id) {
-                    results.push(Some(*debt));
+                    results.push(Some(debt.into_v1()));
                 } else {
                     results.push(None);
                     fallback_keys.push(object_id);
@@ -4714,41 +4684,24 @@ mod quarantine {
             let fallback_results = db_table.multi_get(fallback_keys)?;
             assert_eq!(fallback_results.len(), fallback_indices.len());
             for (i, result) in fallback_indices.into_iter().zip(fallback_results) {
-                results[i] = result;
+                results[i] = result.map(|debt| debt.into_v1());
             }
 
-            Ok(results.into_iter().zip(shared_input_object_ids.into_iter())
-            .map(|(debt, object_id)| {
-                let (round, debt) = debt.into_v1();
-                (
-                    object_id,
-                    // Stored debts already account for the budget of the round in which
-                    // they were accumulated. Application of budget from future rounds to
-                    // the debt is handled here.
-                    debt.saturating_sub(per_commit_budget * (current_round - round - 1)),
-                )
-            }))
-        
-        )
-
-            Ok(results)
-
-
-
-            Ok(hash_table
-                .multi_get(shared_input_object_ids.iter())?
+            Ok(results
                 .into_iter()
-                .flatten()
-                .zip(shared_input_object_ids)
-                .map(move |(debt, object_id)| {
-                    let (round, debt) = debt.into_v1();
-                    (
-                        object_id,
-                        // Stored debts already account for the budget of the round in which
-                        // they were accumulated. Application of budget from future rounds to
-                        // the debt is handled here.
-                        debt.saturating_sub(per_commit_budget * (current_round - round - 1)),
-                    )
+                .zip(shared_input_object_ids.into_iter())
+                .flat_map(move |(debt, object_id)| {
+                    if let Some((round, debt)) = debt {
+                        Some((
+                            object_id,
+                            // Stored debts already account for the budget of the round in which
+                            // they were accumulated. Application of budget from future rounds to
+                            // the debt is handled here.
+                            debt.saturating_sub(per_commit_budget * (current_round - round - 1)),
+                        ))
+                    } else {
+                        None
+                    }
                 }))
         }
     }
@@ -5172,9 +5125,5 @@ where
 
     pub fn get(&self, key: &K) -> Option<&V> {
         self.map.get(key).map(|(_, v)| v)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
-        self.map.iter().map(|(k, (_, v))| (k, v))
     }
 }

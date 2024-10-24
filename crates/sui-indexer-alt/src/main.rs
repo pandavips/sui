@@ -34,12 +34,13 @@ async fn main() -> Result<()> {
     indexer.concurrent_pipeline::<KvCheckpoints>().await?;
     indexer.concurrent_pipeline::<KvObjects>().await?;
     indexer.concurrent_pipeline::<KvTransactions>().await?;
+    indexer.concurrent_pipeline::<TxAffectedAddress>().await?;
     indexer.concurrent_pipeline::<TxAffectedObjects>().await?;
     indexer.concurrent_pipeline::<TxBalanceChanges>().await?;
-    indexer.concurrent_pipeline::<TxAffectedAddress>().await?;
-    indexer.concurrent_pipeline::<TxKinds>().await?;
-    indexer.concurrent_pipeline::<TxDigests>().await?;
     indexer.concurrent_pipeline::<TxCallsFun>().await?;
+    indexer.concurrent_pipeline::<TxDigests>().await?;
+    indexer.concurrent_pipeline::<TxKinds>().await?;
+    indexer.concurrent_pipeline::<TxKinds>().await?;
 
     let h_indexer = indexer.run().await.context("Failed to start indexer")?;
 

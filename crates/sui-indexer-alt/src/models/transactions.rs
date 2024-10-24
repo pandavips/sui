@@ -36,9 +36,21 @@ pub struct StoredTransaction {
 }
 
 #[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = tx_affected_addresses)]
+pub struct StoredTxAffectedAddress {
+    pub tx_sequence_number: i64,
+    /// Address affected by the transaction, including the sender, the gas payer
+    /// and any recipients of objects.
+    pub affected: Vec<u8>,
+    pub sender: Vec<u8>,
+}
+
+#[derive(Insertable, Debug, Clone)]
 #[diesel(table_name = tx_affected_objects)]
 pub struct StoredTxAffectedObject {
     pub tx_sequence_number: i64,
+    /// Object affected by the transaction, including deleted, wrapped, mutated,
+    /// and created objects.
     pub affected: Vec<u8>,
     pub sender: Vec<u8>,
 }
@@ -48,14 +60,6 @@ pub struct StoredTxAffectedObject {
 pub struct StoredTxBalanceChange {
     pub tx_sequence_number: i64,
     pub balance_changes: Vec<u8>,
-}
-
-#[derive(Insertable, Debug, Clone)]
-#[diesel(table_name = tx_affected_addresses)]
-pub struct StoredTxAffectedAddress {
-    pub tx_sequence_number: i64,
-    pub affected: Vec<u8>,
-    pub sender: Vec<u8>,
 }
 
 #[derive(Insertable, Debug, Clone)]
@@ -73,6 +77,13 @@ pub struct StoredTxCallsFun {
 pub struct StoredTxDigest {
     pub tx_digest: Vec<u8>,
     pub tx_sequence_number: i64,
+}
+
+#[derive(Debug, Clone)]
+#[repr(i16)]
+pub enum TxKind {
+    SystemTransaction = 0,
+    ProgrammableTransaction = 1,
 }
 
 #[derive(Insertable, Debug, Clone)]

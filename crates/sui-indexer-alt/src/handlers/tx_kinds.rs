@@ -7,17 +7,15 @@ use anyhow::Result;
 use diesel_async::RunQueryDsl;
 use sui_types::full_checkpoint_content::CheckpointData;
 
-use crate::{db, models::transactions::StoredTxKind, schema::tx_kinds};
+use crate::{
+    db,
+    models::transactions::{StoredTxKind, TxKind},
+    schema::tx_kinds,
+};
 
 use super::Handler;
 
 pub struct TxKinds;
-
-#[derive(Debug, Clone)]
-pub enum TxKind {
-    SystemTransaction = 0,
-    ProgrammableTransaction = 1,
-}
 
 #[async_trait::async_trait]
 impl Handler for TxKinds {

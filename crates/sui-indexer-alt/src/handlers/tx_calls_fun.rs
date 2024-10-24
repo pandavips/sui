@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use diesel_async::RunQueryDsl;
 use sui_types::full_checkpoint_content::CheckpointData;
 use sui_types::transaction::TransactionDataAPI;
@@ -31,16 +31,18 @@ impl Handler for TxCallsFun {
             ..
         } = checkpoint.as_ref();
 
-        let mut values = Vec::new();
+        // let mut values = Vec::new();
         let first_tx = checkpoint_summary.network_total_transactions as usize - transactions.len();
 
-        for (i, tx) in transactions.iter().enumerate() {
-            let tx_sequence_number = (first_tx + i) as i64;
-            let sender = tx.transaction.sender_address().to_vec();
+        Ok(transactions
+            .iter()
+            .enumerate()
+            .flat_map(|(i, tx)| {
+                let tx_sequence_number = (first_tx + i) as i64;
+                let sender = tx.transaction.sender_address().to_vec();
+                let calls = tx.transaction.data().transaction_data().move_calls();
 
-            let move_calls = tx.transaction.data().transaction_data().move_calls();
-            values.extend(
-                move_calls
+                calls
                     .iter()
                     .map(|(package, module, func)| StoredTxCallsFun {
                         tx_sequence_number,
@@ -48,11 +50,10 @@ impl Handler for TxCallsFun {
                         module: module.to_string(),
                         func: func.to_string(),
                         sender: sender.clone(),
-                    }),
-            );
-        }
-
-        Ok(values)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect())
     }
 
     async fn commit(values: &[Self::Value], conn: &mut db::Connection<'_>) -> Result<usize> {

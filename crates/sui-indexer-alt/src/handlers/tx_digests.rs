@@ -30,20 +30,16 @@ impl Handler for TxDigests {
             ..
         } = checkpoint.as_ref();
 
-        let mut values = Vec::new();
         let first_tx = checkpoint_summary.network_total_transactions as usize - transactions.len();
 
-        for (i, tx) in transactions.iter().enumerate() {
-            let tx_sequence_number = (first_tx + i) as i64;
-            let tx_digest = tx.transaction.digest().inner().to_vec();
-
-            values.push(StoredTxDigest {
-                tx_sequence_number,
-                tx_digest,
-            });
-        }
-
-        Ok(values)
+        Ok(transactions
+            .iter()
+            .enumerate()
+            .map(|(i, tx)| StoredTxDigest {
+                tx_sequence_number: (first_tx + i) as i64,
+                tx_digest: tx.transaction.digest().inner().to_vec(),
+            })
+            .collect())
     }
 
     async fn commit(values: &[Self::Value], conn: &mut db::Connection<'_>) -> Result<usize> {

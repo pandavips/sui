@@ -1251,6 +1251,9 @@ pub struct ProtocolConfig {
     /// The maximum number of transactions included in a consensus block.
     consensus_max_num_transactions_in_block: Option<u64>,
 
+    /// The maximum number of rounds where transaction voting is allowed.
+    consensus_voting_rounds: Option<u32>,
+
     /// DEPRECATED. Do not use.
     max_accumulated_txn_cost_per_object_in_narwhal_commit: Option<u64>,
 
@@ -2163,6 +2166,8 @@ impl ProtocolConfig {
 
             consensus_max_num_transactions_in_block: None,
 
+            consensus_voting_rounds: None,
+
             max_accumulated_txn_cost_per_object_in_narwhal_commit: None,
 
             max_deferral_rounds_for_congestion_control: None,
@@ -2916,6 +2921,8 @@ impl ProtocolConfig {
                         Some(3_700_000); // 20% of above
                     cfg.max_txn_cost_overage_per_object_in_commit = Some(u64::MAX);
                     cfg.gas_budget_based_txn_cost_absolute_cap_commit_count = Some(50);
+
+                    cfg.consensus_voting_rounds = Some(40);
                 }
                 // Use this template when making changes:
                 //
@@ -3077,10 +3084,6 @@ impl ProtocolConfig {
 
     pub fn set_consensus_round_prober_for_testing(&mut self, val: bool) {
         self.feature_flags.consensus_round_prober = val;
-    }
-
-    pub fn set_gc_depth_for_testing(&mut self, val: u32) {
-        self.consensus_gc_depth = Some(val);
     }
 }
 

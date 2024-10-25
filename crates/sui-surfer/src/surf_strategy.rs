@@ -40,6 +40,8 @@ impl SurfStrategy {
         state: &mut SurferState,
         mut entry_functions: Vec<EntryFunction>,
     ) {
+        assert!(!entry_functions.is_empty());
+
         entry_functions.shuffle(&mut state.rng);
         for entry in entry_functions {
             let next_tx_time = Instant::now() + self.min_tx_interval;

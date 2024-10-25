@@ -43,6 +43,7 @@ mod test {
     use sui_types::transaction::{
         DEFAULT_VALIDATOR_GAS_PRICE, TEST_ONLY_GAS_UNIT_FOR_HEAVY_COMPUTATION_STORAGE,
     };
+    use sui_types::{SUI_FRAMEWORK_PACKAGE_ID, SUI_SYSTEM_PACKAGE_ID};
     use test_cluster::{TestCluster, TestClusterBuilder};
     use tracing::{error, info, trace};
     use typed_store::traits::Map;
@@ -1044,7 +1045,7 @@ mod test {
             let results = sui_surfer::run_with_test_cluster_and_strategy(
                 surf_strategy,
                 test_duration,
-                test_package_paths,
+                test_package_paths.into_iter().map(|p| p.into()).collect(),
                 test_cluster,
                 1, // skip first account for use by bench_task
             )
@@ -1055,5 +1056,27 @@ mod test {
         });
 
         let _ = futures::join!(bench_task, surfer_task);
+    }
+
+    #[sim_test]
+    async fn test_sui_surfer_framework() {
+        let test_duration = Duration::from_secs(60);
+        let mut test_cluster = build_test_cluster(4, 1000).await;
+
+        let surf_strategy = SurfStrategy::new(Duration::from_millis(400));
+        let results = sui_surfer::run_with_test_cluster_and_strategy(
+            surf_strategy,
+            test_duration,
+            vec![
+                SUI_FRAMEWORK_PACKAGE_ID.into(),
+                SUI_SYSTEM_PACKAGE_ID.into(),
+            ],
+            test_cluster,
+            1, // skip first account for use by bench_task
+        )
+        .await;
+        info!("sui_surfer test complete with results: {results:?}");
+        assert!(results.num_successful_transactions > 0);
+        assert!(!results.unique_move_functions_called.is_empty());
     }
 }

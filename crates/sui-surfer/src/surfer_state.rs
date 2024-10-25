@@ -264,6 +264,17 @@ impl SurferState {
         }
     }
 
+    #[tracing::instrument(skip_all, fields(surfer_id = self.id))]
+    pub async fn add_package(&self, package: ObjectID) {
+        let object = self
+            .cluster
+            .get_object_from_fullnode_store(&package)
+            .await
+            .unwrap();
+        assert!(object.is_package());
+        self.discover_entry_functions(object).await;
+    }
+
     async fn discover_entry_functions(&self, package: Object) {
         let package_id = package.id();
         let move_package = package.into_inner().data.try_into_package().unwrap();

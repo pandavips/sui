@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use sui_swarm_config::genesis_config::{AccountConfig, DEFAULT_GAS_AMOUNT};
+use sui_types::base_types::ObjectID;
 use surf_strategy::SurfStrategy;
 use test_cluster::{TestCluster, TestClusterBuilder};
 use tokio::sync::watch;
@@ -29,7 +30,7 @@ const GAS_OBJECT_COUNT: usize = 3;
 pub async fn run(
     run_duration: Duration,
     epoch_duration: Duration,
-    package_paths: Vec<PathBuf>,
+    packages: Vec<PackageSpec>,
 ) -> SurfStatistics {
     let cluster = TestClusterBuilder::new()
         .with_num_validators(VALIDATOR_COUNT)
@@ -48,12 +49,12 @@ pub async fn run(
         VALIDATOR_COUNT,
         epoch_duration.as_millis()
     );
-    run_with_test_cluster(run_duration, package_paths, cluster.into(), 0).await
+    run_with_test_cluster(run_duration, packages, cluster.into(), 0).await
 }
 
 pub async fn run_with_test_cluster(
     run_duration: Duration,
-    package_paths: Vec<PathBuf>,
+    packages: Vec<PackageSpec>,
     cluster: Arc<TestCluster>,
     // Skips the first N accounts, for use in case this is running concurrently with other
     // processes that also need gas.
@@ -62,17 +63,34 @@ pub async fn run_with_test_cluster(
     run_with_test_cluster_and_strategy(
         SurfStrategy::default(),
         run_duration,
-        package_paths,
+        packages,
         cluster,
         skip_accounts,
     )
     .await
 }
 
+pub enum PackageSpec {
+    Path(PathBuf), // must be published
+    Id(ObjectID),  // already published, just needs to be crawled.
+}
+
+impl From<PathBuf> for PackageSpec {
+    fn from(path: PathBuf) -> Self {
+        PackageSpec::Path(path)
+    }
+}
+
+impl From<ObjectID> for PackageSpec {
+    fn from(id: ObjectID) -> Self {
+        PackageSpec::Id(id)
+    }
+}
+
 pub async fn run_with_test_cluster_and_strategy(
     surf_strategy: SurfStrategy,
     run_duration: Duration,
-    package_paths: Vec<PathBuf>,
+    package_paths: Vec<PackageSpec>,
     cluster: Arc<TestCluster>,
     // Skips the first N accounts, for use in case this is running concurrently with other
     // processes that also need gas.
@@ -93,13 +111,25 @@ pub async fn run_with_test_cluster_and_strategy(
     .await;
     info!("Created {} surfer tasks", tasks.len());
 
-    for path in &package_paths {
-        tasks
-            .choose_mut(&mut rng)
-            .unwrap()
-            .state
-            .publish_package(path)
-            .await;
+    for pkg in &package_paths {
+        match pkg {
+            PackageSpec::Path(path) => {
+                tasks
+                    .choose_mut(&mut rng)
+                    .unwrap()
+                    .state
+                    .publish_package(path)
+                    .await;
+            }
+            PackageSpec::Id(id) => {
+                tasks
+                    .choose_mut(&mut rng)
+                    .unwrap()
+                    .state
+                    .add_package(*id)
+                    .await;
+            }
+        }
     }
 
     let mut handles = vec![];

@@ -1060,8 +1060,8 @@ mod test {
 
     #[sim_test]
     async fn test_sui_surfer_framework() {
-        let test_duration = Duration::from_secs(60);
-        let mut test_cluster = build_test_cluster(4, 1000).await;
+        let test_duration = Duration::from_secs(300);
+        let mut test_cluster = build_test_cluster(4, 20000).await;
 
         let surf_strategy = SurfStrategy::new(Duration::from_millis(400));
         let results = sui_surfer::run_with_test_cluster_and_strategy(

@@ -5,6 +5,7 @@ use futures::future::join_all;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+use regex::Regex;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,6 +32,7 @@ pub async fn run(
     run_duration: Duration,
     epoch_duration: Duration,
     packages: Vec<PackageSpec>,
+    entry_function_exclude_regex: Option<Regex>,
 ) -> SurfStatistics {
     let cluster = TestClusterBuilder::new()
         .with_num_validators(VALIDATOR_COUNT)
@@ -49,12 +51,20 @@ pub async fn run(
         VALIDATOR_COUNT,
         epoch_duration.as_millis()
     );
-    run_with_test_cluster(run_duration, packages, cluster.into(), 0).await
+    run_with_test_cluster(
+        run_duration,
+        packages,
+        entry_function_exclude_regex,
+        cluster.into(),
+        0,
+    )
+    .await
 }
 
 pub async fn run_with_test_cluster(
     run_duration: Duration,
     packages: Vec<PackageSpec>,
+    entry_function_exclude_regex: Option<Regex>,
     cluster: Arc<TestCluster>,
     // Skips the first N accounts, for use in case this is running concurrently with other
     // processes that also need gas.
@@ -64,6 +74,7 @@ pub async fn run_with_test_cluster(
         SurfStrategy::default(),
         run_duration,
         packages,
+        entry_function_exclude_regex,
         cluster,
         skip_accounts,
     )
@@ -91,6 +102,7 @@ pub async fn run_with_test_cluster_and_strategy(
     surf_strategy: SurfStrategy,
     run_duration: Duration,
     package_paths: Vec<PackageSpec>,
+    entry_function_exclude_regex: Option<Regex>,
     cluster: Arc<TestCluster>,
     // Skips the first N accounts, for use in case this is running concurrently with other
     // processes that also need gas.
@@ -107,6 +119,7 @@ pub async fn run_with_test_cluster_and_strategy(
         exit_rcv,
         skip_accounts,
         surf_strategy,
+        entry_function_exclude_regex,
     )
     .await;
     info!("Created {} surfer tasks", tasks.len());

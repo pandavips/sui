@@ -1,8 +1,9 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::time::Duration;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use futures::future::BoxFuture;
 use move_binary_format::normalized::Type;
 use move_core_types::language_storage::StructTag;
 use rand::{seq::SliceRandom, Rng};
@@ -11,7 +12,7 @@ use sui_types::{
     transaction::{CallArg, ObjectArg},
 };
 use tokio::time::Instant;
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 use crate::surfer_state::{EntryFunction, SurferState};
 
@@ -21,14 +22,32 @@ enum InputObjectPassKind {
     MutRef,
 }
 
+type CallRewriteFn = dyn for<'a> Fn(&'a SurferState, &'a EntryFunction, &'a mut Vec<CallArg>) -> BoxFuture<'a, bool>
+    + Send
+    + Sync
+    + 'static;
+
 #[derive(Clone, Default)]
 pub struct SurfStrategy {
     min_tx_interval: Duration,
+
+    // Function call helpers, which, given a function name (specified as 'module::func'),
+    // can re-write the arguments after sui surfer has chosen them. Can return false to
+    // indicate that the call should not be attempted.
+    call_rewriters: HashMap<String, Arc<CallRewriteFn>>,
 }
 
 impl SurfStrategy {
     pub fn new(min_tx_interval: Duration) -> Self {
-        Self { min_tx_interval }
+        Self {
+            min_tx_interval,
+            call_rewriters: HashMap::new(),
+        }
+    }
+
+    pub fn add_call_rewriter(&mut self, function_name: &str, rewriter: Arc<CallRewriteFn>) {
+        self.call_rewriters
+            .insert(function_name.to_string(), rewriter);
     }
 
     /// Given a state and a list of callable Move entry functions,
@@ -45,13 +64,22 @@ impl SurfStrategy {
         entry_functions.shuffle(&mut state.rng);
         for entry in entry_functions {
             let next_tx_time = Instant::now() + self.min_tx_interval;
-            let Some(args) = Self::choose_function_call_args(state, &entry).await else {
-                debug!(
+            let Some(mut args) = Self::choose_function_call_args(state, &entry).await else {
+                warn!(
                     "Failed to choose arguments for Move function {:?}::{:?}",
                     entry.module, entry.function
                 );
                 continue;
             };
+
+            let name = entry.qualified_name();
+            if let Some(helper) = self.call_rewriters.get(&name) {
+                if !helper(state, &entry, &mut args).await {
+                    info!("Skipping call to function due to helper: {}", name);
+                    continue;
+                }
+            }
+
             state.execute_move_transaction(&entry, args).await;
             tokio::time::sleep_until(next_tx_time).await;
         }

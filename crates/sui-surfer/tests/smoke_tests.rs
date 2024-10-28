@@ -14,6 +14,7 @@ async fn smoke_test() {
         Duration::from_secs(30),
         Duration::from_secs(15),
         vec![path.into()],
+        None,
     )
     .await;
     assert!(results.num_successful_transactions > 0);

@@ -16,6 +16,9 @@ struct Args {
 
     #[clap(long, help = "List of package paths to surf")]
     packages: Vec<PathBuf>,
+
+    #[clap(short, long, help = "Exclude entry functions matching the regex")]
+    entry_function_exclude_regex: Option<String>,
 }
 
 const DEFAULT_RUN_DURATION: u64 = 30;
@@ -34,10 +37,21 @@ async fn main() {
         .with_env()
         .init();
 
+    let entry_function_exclude_regex = if let Some(regex) = args.entry_function_exclude_regex {
+        let Ok(re) = regex::Regex::new(&regex) else {
+            eprint!("Invalid --entry-function-exclude-regex: {}", regex);
+            return;
+        };
+        Some(re)
+    } else {
+        None
+    };
+
     let results = sui_surfer::run(
         Duration::from_secs(args.run_duration.unwrap_or(DEFAULT_RUN_DURATION)),
         Duration::from_secs(args.run_duration.unwrap_or(DEFAULT_EPOCH_DURATION)),
         args.packages.into_iter().map(|p| p.into()).collect(),
+        entry_function_exclude_regex,
     )
     .await;
     results.print_stats();

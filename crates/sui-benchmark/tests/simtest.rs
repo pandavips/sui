@@ -3,7 +3,9 @@
 
 #[cfg(msim)]
 mod test {
+    use futures::future::BoxFuture;
     use rand::{distributions::uniform::SampleRange, thread_rng, Rng};
+    use regex::Regex;
     use std::collections::HashSet;
     use std::path::PathBuf;
     use std::str::FromStr;
@@ -34,7 +36,7 @@ mod test {
     use sui_simulator::tempfile::TempDir;
     use sui_simulator::{configs::*, SimConfig};
     use sui_storage::blob::Blob;
-    use sui_surfer::surf_strategy::SurfStrategy;
+    use sui_surfer::surf_strategy::{self, SurfStrategy};
     use sui_types::base_types::{ConciseableName, ObjectID, SequenceNumber};
     use sui_types::digests::TransactionDigest;
     use sui_types::full_checkpoint_content::CheckpointData;
@@ -43,7 +45,7 @@ mod test {
     use sui_types::transaction::{
         DEFAULT_VALIDATOR_GAS_PRICE, TEST_ONLY_GAS_UNIT_FOR_HEAVY_COMPUTATION_STORAGE,
     };
-    use sui_types::{SUI_FRAMEWORK_PACKAGE_ID, SUI_SYSTEM_PACKAGE_ID};
+    use sui_types::{SUI_SYSTEM_PACKAGE_ID, SUI_SYSTEM_STATE_OBJECT_ID};
     use test_cluster::{TestCluster, TestClusterBuilder};
     use tracing::{error, info, trace};
     use typed_store::traits::Map;
@@ -1046,6 +1048,7 @@ mod test {
                 surf_strategy,
                 test_duration,
                 test_package_paths.into_iter().map(|p| p.into()).collect(),
+                None,
                 test_cluster,
                 1, // skip first account for use by bench_task
             )
@@ -1063,14 +1066,26 @@ mod test {
         let test_duration = Duration::from_secs(300);
         let mut test_cluster = build_test_cluster(4, 20000).await;
 
-        let surf_strategy = SurfStrategy::new(Duration::from_millis(400));
+        let mut surf_strategy = SurfStrategy::new(Duration::from_millis(400));
+
+        surf_strategy.add_call_helper("sui_system::request_add_state", |state, entry_fn, args| {
+            async move {
+                // get system object
+                let system_object = state
+                    .cluster
+                    .get_object_from_fullnode_store(SUI_SYSTEM_STATE_OBJECT_ID)
+                    .await
+                    .unwrap();
+            }
+            .boxed()
+        });
+        //   "sui_system::request_add_state_non_entry",
+
         let results = sui_surfer::run_with_test_cluster_and_strategy(
             surf_strategy,
             test_duration,
-            vec![
-                SUI_FRAMEWORK_PACKAGE_ID.into(),
-                SUI_SYSTEM_PACKAGE_ID.into(),
-            ],
+            vec![SUI_SYSTEM_PACKAGE_ID.into()],
+            Some(Regex::new("(add|remove_update).*_validator|^validator::").unwrap()),
             test_cluster,
             1, // skip first account for use by bench_task
         )

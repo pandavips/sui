@@ -14,6 +14,7 @@ sui-move-build.workspace = true
 sui-protocol-config.workspace = true
 sui-types.workspace = true
 test-cluster.workspace = true
+regex.workspace = true
 
 async-trait.workspace = true
 bcs.workspace = true
@@ -21,6 +22,7 @@ clap.workspace = true
 futures.workspace = true
 indexmap.workspace = true
 rand.workspace = true
+mysten-common.workspace = true
 tokio = { workspace = true, features = ["full", "tracing", "test-util"] }
 tracing.workspace = true
 

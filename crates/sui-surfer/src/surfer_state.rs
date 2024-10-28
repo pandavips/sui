@@ -5,7 +5,9 @@ use indexmap::IndexSet;
 use move_binary_format::file_format::Visibility;
 use move_binary_format::normalized::Type;
 use move_core_types::language_storage::StructTag;
+use mysten_common::fatal;
 use rand::rngs::StdRng;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -36,6 +38,11 @@ pub struct EntryFunction {
     pub return_type: Option<Type>,
 }
 
+impl EntryFunction {
+    pub fn qualified_name(&self) -> String {
+        format!("{}::{}", self.module, self.function)
+    }
+}
 #[derive(Debug, Default)]
 pub struct SurfStatistics {
     pub num_successful_transactions: u64,
@@ -119,6 +126,7 @@ pub struct SurferState {
     pub immutable_objects: ImmObjects,
     pub shared_objects: SharedObjects,
     pub entry_functions: Arc<RwLock<Vec<EntryFunction>>>,
+    pub entry_function_exclude_regex: Option<Regex>,
 
     pub stats: SurfStatistics,
 }
@@ -134,6 +142,7 @@ impl SurferState {
         immutable_objects: ImmObjects,
         shared_objects: SharedObjects,
         entry_functions: Arc<RwLock<Vec<EntryFunction>>>,
+        entry_function_exclude_regex: Option<Regex>,
     ) -> Self {
         Self {
             id,
@@ -145,6 +154,7 @@ impl SurferState {
             immutable_objects,
             shared_objects,
             entry_functions,
+            entry_function_exclude_regex,
             stats: Default::default(),
         }
     }
@@ -200,6 +210,7 @@ impl SurferState {
                 Ok(effects) => break effects,
                 Err(e) => {
                     error!("Error executing transaction: {:?}", e);
+                    fatal!("Transaction: {:#?}", tx);
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
@@ -236,6 +247,14 @@ impl SurferState {
                 continue;
             }
             let obj_ref = owned_ref.reference.to_object_ref();
+            if obj_ref.0 == self.gas_object.0 {
+                // cannot support transferring away the gas coin or otherwise
+                // loosing access to it.
+                assert_eq!(owned_ref.owner, self.address);
+                assert_eq!(write_kind, WriteKind::Mutate);
+                continue;
+            }
+
             let object = self
                 .cluster
                 .get_object_from_fullnode_store(&obj_ref.0)
@@ -279,9 +298,6 @@ impl SurferState {
                     // we should already have it in the inventory.
                 }
             }
-            if obj_ref.0 == self.gas_object.0 {
-                self.gas_object = obj_ref;
-            }
         }
     }
 
@@ -300,7 +316,11 @@ impl SurferState {
         // Sui Surfer can call functions that return nothing, or that return a single
         // object
         fn get_allowable_return_type(return_type: &[Type]) -> Result<Option<Type>, ()> {
-            if return_type.is_empty() || return_type.len() > 2 {
+            if return_type.is_empty() {
+                return Ok(None);
+            }
+
+            if return_type.len() > 1 {
                 return Err(());
             }
 
@@ -331,21 +351,30 @@ impl SurferState {
                     .functions
                     .into_iter()
                     .filter_map(|(func_name, func)| {
+                        info!("Checking entry function: {}::{}", module_name, func_name);
+
+                        // check if name is excluded by regex
+                        if let Some(filter_re) = &self.entry_function_exclude_regex {
+                            if filter_re.is_match(&format!("{}::{}", module_name, func_name)) {
+                                info!("-- excluded by regex");
+                                return None;
+                            }
+                        }
+
                         // Either public function or entry function is callable.
                         if !matches!(func.visibility, Visibility::Public) && !func.is_entry {
+                            info!("-- not callable");
                             return None;
                         }
 
                         let Ok(return_type) = get_allowable_return_type(&func.return_) else {
+                            info!("-- bad return type {:?}", func.return_);
                             return None;
                         };
 
-                        // Surfer doesn't support chaining transactions in a programmable transaction yet.
-                        if !func.return_.is_empty() {
-                            return None;
-                        }
                         // Surfer doesn't support type parameter yet.
                         if !func.type_parameters.is_empty() {
+                            info!("-- type parameters not supported");
                             return None;
                         }
                         let mut parameters = func.parameters;
@@ -354,6 +383,7 @@ impl SurferState {
                                 parameters.pop();
                             }
                         }
+                        info!("Discovered entry function: {}::{}", module_name, func_name);
                         Some(EntryFunction {
                             package: package_id,
                             module: module_name.clone(),

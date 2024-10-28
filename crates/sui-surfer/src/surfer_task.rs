@@ -4,6 +4,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use regex::Regex;
 use sui_core::authority::authority_store_tables::LiveObject;
 use sui_types::{
     base_types::{ObjectRef, SuiAddress},
@@ -30,6 +31,7 @@ impl SurferTask {
         exit_rcv: watch::Receiver<()>,
         skip_accounts: usize,
         surf_strategy: SurfStrategy,
+        entry_function_exclude_regex: Option<Regex>,
     ) -> Vec<SurferTask> {
         let mut rng = StdRng::seed_from_u64(seed);
         let immutable_objects: ImmObjects = Arc::new(RwLock::new(HashMap::new()));
@@ -98,6 +100,7 @@ impl SurferTask {
                 LiveObject::Wrapped(_) => unreachable!("Explicitly skipped wrapped objects"),
             }
         }
+        //dbg!(&accounts);
         let entry_functions = Arc::new(RwLock::new(vec![]));
         accounts
             .into_iter()
@@ -115,6 +118,7 @@ impl SurferTask {
                     immutable_objects.clone(),
                     shared_objects.clone(),
                     entry_functions.clone(),
+                    entry_function_exclude_regex.clone(),
                 );
                 SurferTask {
                     state,

@@ -16,8 +16,11 @@ use sui_protocol_config::{Chain, ProtocolConfig};
 use sui_types::base_types::{ObjectID, ObjectRef, SequenceNumber, SuiAddress};
 use sui_types::execution_config_utils::to_binary_config;
 use sui_types::object::{Object, Owner};
+use sui_types::programmable_transaction_builder::ProgrammableTransactionBuilder;
 use sui_types::storage::WriteKind;
-use sui_types::transaction::{CallArg, ObjectArg, TransactionData, TEST_ONLY_GAS_UNIT_FOR_PUBLISH};
+use sui_types::transaction::{
+    Argument, CallArg, ObjectArg, TransactionData, TEST_ONLY_GAS_UNIT_FOR_PUBLISH,
+};
 use sui_types::{Identifier, SUI_FRAMEWORK_ADDRESS};
 use test_cluster::TestCluster;
 use tokio::sync::RwLock;
@@ -29,6 +32,8 @@ pub struct EntryFunction {
     pub module: String,
     pub function: String,
     pub parameters: Vec<Type>,
+    // return type must be either none or a single object (by value)
+    pub return_type: Option<Type>,
 }
 
 #[derive(Debug, Default)]
@@ -145,29 +150,45 @@ impl SurferState {
     }
 
     #[tracing::instrument(skip_all, fields(surfer_id = self.id))]
-    pub async fn execute_move_transaction(
-        &mut self,
-        package: ObjectID,
-        module: String,
-        function: String,
-        args: Vec<CallArg>,
-    ) {
+    pub async fn execute_move_transaction(&mut self, entry: &EntryFunction, args: Vec<CallArg>) {
+        let EntryFunction {
+            package,
+            module,
+            function,
+            return_type,
+            ..
+        } = entry;
+
         let rgp = self.cluster.get_reference_gas_price().await;
         let use_shared_object = args
             .iter()
             .any(|arg| matches!(arg, CallArg::Object(ObjectArg::SharedObject { .. })));
-        let tx_data = TransactionData::new_move_call(
-            self.address,
-            package,
+
+        let mut pt = ProgrammableTransactionBuilder::new();
+        pt.move_call(
+            *package,
             Identifier::new(module.as_str()).unwrap(),
             Identifier::new(function.as_str()).unwrap(),
             vec![],
-            self.gas_object,
             args,
-            TEST_ONLY_GAS_UNIT_FOR_PUBLISH * rgp,
-            rgp,
         )
         .unwrap();
+
+        // Transfer object outputs to ourselves
+        if let Some(rt) = return_type {
+            assert!(matches!(rt, Type::Struct { .. }));
+            pt.transfer_arg(self.address, Argument::Result(0));
+        }
+        let pt = pt.finish();
+
+        let tx_data = TransactionData::new_programmable(
+            self.address,
+            vec![self.gas_object],
+            pt,
+            TEST_ONLY_GAS_UNIT_FOR_PUBLISH * rgp,
+            rgp,
+        );
+
         let tx = self.cluster.wallet.sign_transaction(&tx_data);
         let response = loop {
             match self
@@ -198,9 +219,9 @@ impl SurferState {
         self.stats.record_transaction(
             use_shared_object,
             effects.status().is_ok(),
-            package,
-            module,
-            function,
+            *package,
+            module.to_string(),
+            function.to_string(),
         );
         self.process_tx_effects(&effects).await;
     }
@@ -276,6 +297,26 @@ impl SurferState {
     }
 
     async fn discover_entry_functions(&self, package: Object) {
+        // Sui Surfer can call functions that return nothing, or that return a single
+        // object
+        fn get_allowable_return_type(return_type: &[Type]) -> Result<Option<Type>, ()> {
+            if return_type.is_empty() || return_type.len() > 2 {
+                return Err(());
+            }
+
+            let ret = &return_type[0];
+
+            if !ret.is_closed() {
+                return Err(());
+            }
+
+            if matches!(ret, Type::Struct { .. }) {
+                Ok(Some(ret.clone()))
+            } else {
+                Err(())
+            }
+        }
+
         let package_id = package.id();
         let move_package = package.into_inner().data.try_into_package().unwrap();
         let proto_version = self.cluster.highest_protocol_version();
@@ -294,6 +335,11 @@ impl SurferState {
                         if !matches!(func.visibility, Visibility::Public) && !func.is_entry {
                             return None;
                         }
+
+                        let Ok(return_type) = get_allowable_return_type(&func.return_) else {
+                            return None;
+                        };
+
                         // Surfer doesn't support chaining transactions in a programmable transaction yet.
                         if !func.return_.is_empty() {
                             return None;
@@ -313,6 +359,7 @@ impl SurferState {
                             module: module_name.clone(),
                             function: func_name.to_string(),
                             parameters,
+                            return_type,
                         })
                     })
                     .collect::<Vec<_>>()

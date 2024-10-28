@@ -45,24 +45,24 @@ impl SurfStrategy {
         entry_functions.shuffle(&mut state.rng);
         for entry in entry_functions {
             let next_tx_time = Instant::now() + self.min_tx_interval;
-            let Some(args) = Self::choose_function_call_args(state, entry.parameters).await else {
+            let Some(args) = Self::choose_function_call_args(state, &entry).await else {
                 debug!(
                     "Failed to choose arguments for Move function {:?}::{:?}",
                     entry.module, entry.function
                 );
                 continue;
             };
-            state
-                .execute_move_transaction(entry.package, entry.module, entry.function, args)
-                .await;
+            state.execute_move_transaction(&entry, args).await;
             tokio::time::sleep_until(next_tx_time).await;
         }
     }
 
     async fn choose_function_call_args(
         state: &mut SurferState,
-        params: Vec<Type>,
+        entry: &EntryFunction,
     ) -> Option<Vec<CallArg>> {
+        let params = entry.parameters.clone();
+
         let mut args = vec![];
         let mut chosen_owned_objects = vec![];
         let mut failed = false;

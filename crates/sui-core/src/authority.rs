@@ -962,7 +962,12 @@ impl AuthorityState {
         // and returns ConflictingTransaction error in case there is a lock on a different
         // existing transaction.
         self.get_cache_writer()
-            .acquire_transaction_locks(epoch_store, &owned_objects, signed_transaction.clone())
+            .acquire_transaction_locks(
+                epoch_store,
+                &owned_objects,
+                *signed_transaction.digest(),
+                Some(signed_transaction.clone()),
+            )
             .await?;
 
         Ok(signed_transaction)
@@ -3066,7 +3071,14 @@ impl AuthorityState {
         &self.transaction_manager
     }
 
-    /// Adds certificates to transaction manager for ordered execution.
+    /// Adds transactions / certificates to transaction manager for ordered execution.
+    pub fn enqueue_transactions_for_execution(
+        &self,
+        txns: Vec<VerifiedExecutableTransaction>,
+        epoch_store: &Arc<AuthorityPerEpochStore>,
+    ) {
+        self.transaction_manager.enqueue(txns, epoch_store)
+    }
     pub fn enqueue_certificates_for_execution(
         &self,
         certs: Vec<VerifiedCertificate>,

@@ -12,7 +12,10 @@ use crate::authority::AuthorityState;
 use crate::authority_aggregator::AuthorityAggregator;
 use crate::authority_client::{AuthorityAPI, NetworkAuthorityClient};
 use crate::quorum_driver::reconfig_observer::{OnsiteReconfigObserver, ReconfigObserver};
-use crate::quorum_driver::{QuorumDriverHandler, QuorumDriverHandlerBuilder, QuorumDriverMetrics};
+use crate::quorum_driver::{
+    QuorumDriverHandler, QuorumDriverHandlerBuilder, QuorumDriverMetrics, SubmitTransactionOptions,
+    TransactionDriver,
+};
 use futures::future::{select, Either, Future};
 use futures::FutureExt;
 use mysten_common::sync::notify_read::NotifyRead;
@@ -54,6 +57,7 @@ const WAIT_FOR_FINALITY_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct TransactiondOrchestrator<A: Clone> {
     quorum_driver_handler: Arc<QuorumDriverHandler<A>>,
+    transaction_driver: Arc<TransactionDriver<A>>,
     validator_state: Arc<AuthorityState>,
     _local_executor_handle: JoinHandle<()>,
     pending_tx_log: Arc<WritePathPendingTransactionLog>,
@@ -98,17 +102,17 @@ where
         prometheus_registry: &Registry,
         reconfig_observer: OnsiteReconfigObserver,
     ) -> Self {
+        let metrics = Arc::new(QuorumDriverMetrics::new(prometheus_registry));
         let notifier = Arc::new(NotifyRead::new());
+        let reconfig_observer = Arc::new(reconfig_observer);
         let quorum_driver_handler = Arc::new(
-            QuorumDriverHandlerBuilder::new(
-                validators,
-                Arc::new(QuorumDriverMetrics::new(prometheus_registry)),
-            )
-            .with_notifier(notifier.clone())
-            .with_reconfig_observer(Arc::new(reconfig_observer))
-            .start(),
+            QuorumDriverHandlerBuilder::new(validators.clone(), metrics.clone())
+                .with_notifier(notifier.clone())
+                .with_reconfig_observer(reconfig_observer.clone())
+                .start(),
         );
-
+        let transaction_driver =
+            TransactionDriver::new(validators, reconfig_observer, metrics.clone());
         let effects_receiver = quorum_driver_handler.subscribe_to_effects();
         let metrics = Arc::new(TransactionOrchestratorMetrics::new(prometheus_registry));
         let pending_tx_log = Arc::new(WritePathPendingTransactionLog::new(
@@ -123,6 +127,7 @@ where
         Self::schedule_txes_in_log(pending_tx_log.clone(), quorum_driver_handler.clone());
         Self {
             quorum_driver_handler,
+            transaction_driver,
             validator_state,
             _local_executor_handle,
             pending_tx_log,
@@ -200,6 +205,18 @@ where
         client_addr: Option<SocketAddr>,
     ) -> Result<ExecuteTransactionResponseV3, QuorumDriverError> {
         let epoch_store = self.validator_state.load_epoch_store_one_call_per_task();
+
+        if epoch_store.protocol_config().mysticeti_fastpath() {
+            return self
+                .transaction_driver
+                .submit_transaction(
+                    request,
+                    SubmitTransactionOptions {
+                        forwarded_client_addr: client_addr,
+                    },
+                )
+                .await;
+        }
 
         let QuorumDriverResponse {
             effects_cert,

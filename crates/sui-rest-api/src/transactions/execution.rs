@@ -102,6 +102,9 @@ async fn execute_transaction(
                 _epoch,
                 checkpoint,
             ) => EffectsFinality::Checkpointed { checkpoint },
+            sui_types::quorum_driver_types::EffectsFinalityInfo::QuorumExecuted(_) => {
+                EffectsFinality::QuorumExecuted
+            }
         };
 
         (effects.try_into()?, finality)
@@ -209,6 +212,7 @@ pub enum EffectsFinality {
     Checkpointed {
         checkpoint: CheckpointSequenceNumber,
     },
+    QuorumExecuted,
 }
 
 impl serde::Serialize for EffectsFinality {
@@ -224,6 +228,7 @@ impl serde::Serialize for EffectsFinality {
                 EffectsFinality::Checkpointed { checkpoint } => {
                     ReadableEffectsFinality::Checkpointed { checkpoint }
                 }
+                EffectsFinality::QuorumExecuted => ReadableEffectsFinality::QuorumExecuted,
             };
             readable.serialize(serializer)
         } else {
@@ -234,6 +239,7 @@ impl serde::Serialize for EffectsFinality {
                 EffectsFinality::Checkpointed { checkpoint } => {
                     BinaryEffectsFinality::Checkpointed { checkpoint }
                 }
+                EffectsFinality::QuorumExecuted => BinaryEffectsFinality::QuorumExecuted,
             };
             binary.serialize(serializer)
         }
@@ -253,6 +259,7 @@ impl<'de> serde::Deserialize<'de> for EffectsFinality {
                 ReadableEffectsFinality::Checkpointed { checkpoint } => {
                     EffectsFinality::Checkpointed { checkpoint }
                 }
+                ReadableEffectsFinality::QuorumExecuted => EffectsFinality::QuorumExecuted,
             })
         } else {
             BinaryEffectsFinality::deserialize(deserializer).map(|binary| match binary {
@@ -262,6 +269,7 @@ impl<'de> serde::Deserialize<'de> for EffectsFinality {
                 BinaryEffectsFinality::Checkpointed { checkpoint } => {
                     EffectsFinality::Checkpointed { checkpoint }
                 }
+                BinaryEffectsFinality::QuorumExecuted => EffectsFinality::QuorumExecuted,
             })
         }
     }
@@ -290,6 +298,7 @@ enum ReadableEffectsFinality {
         #[schemars(with = "crate::_schemars::U64")]
         checkpoint: CheckpointSequenceNumber,
     },
+    QuorumExecuted,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -301,6 +310,7 @@ enum BinaryEffectsFinality {
     Checkpointed {
         checkpoint: CheckpointSequenceNumber,
     },
+    QuorumExecuted,
 }
 
 fn coins(objects: &[Object]) -> impl Iterator<Item = (&Address, Coin<'_>)> + '_ {

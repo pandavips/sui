@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::quorum_driver::reconfig_observer::DummyReconfigObserver;
-use crate::quorum_driver::{AuthorityAggregator, QuorumDriverHandlerBuilder};
+use crate::quorum_driver::transaction_driver::SubmitTransactionOptions;
+use crate::quorum_driver::{
+    AuthorityAggregator, AuthorityAggregatorUpdatable as _, QuorumDriverHandlerBuilder,
+    TransactionDriver,
+};
 use crate::test_authority_clients::LocalAuthorityClient;
 use crate::test_authority_clients::LocalAuthorityClientFaultConfig;
 use crate::test_utils::make_transfer_sui_transaction;
@@ -215,9 +219,7 @@ async fn test_quorum_driver_update_validators_and_max_retry_times() {
     let mut committee = aggregator.clone_inner_committee_test_only();
     committee.epoch = 10;
     aggregator.committee = Arc::new(committee);
-    quorum_driver_clone
-        .update_validators(Arc::new(aggregator))
-        .await;
+    quorum_driver_clone.update_authority_aggregator(Arc::new(aggregator));
     assert_eq!(
         quorum_driver_handler.clone_quorum_driver().current_epoch(),
         10
@@ -595,4 +597,26 @@ async fn test_quorum_driver_handling_overload_and_retry() {
             println!("Waiting for txn timed out! This is desired behavior.")
         }
     }
+}
+
+#[tokio::test]
+async fn test_transaction_driver_submit_transaction() {
+    // GIVEN
+    let (aggregator, tx) = setup().await;
+    let digest = *tx.digest();
+    let transaction_driver = TransactionDriver::new(
+        Arc::new(aggregator),
+        Arc::new(DummyReconfigObserver {}),
+        Arc::new(QuorumDriverMetrics::new_for_tests()),
+    );
+
+    // EXPECT transaction submission and execution to succeed
+    let resp = transaction_driver
+        .submit_transaction(
+            ExecuteTransactionRequestV3::new_v2(tx),
+            SubmitTransactionOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.effects.effects.transaction_digest(), &digest);
 }

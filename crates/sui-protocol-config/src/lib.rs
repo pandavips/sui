@@ -1651,6 +1651,9 @@ impl ProtocolConfig {
     }
 
     pub fn mysticeti_fastpath(&self) -> bool {
+        if let Some(enabled) = is_mysticeti_fpc_enabled_in_env() {
+            return enabled;
+        }
         self.feature_flags.mysticeti_fastpath
     }
 
@@ -3173,6 +3176,17 @@ macro_rules! check_limit_by_meter {
         };
         result
     }};
+}
+
+pub fn is_mysticeti_fpc_enabled_in_env() -> Option<bool> {
+    if let Ok(v) = std::env::var("CONSENSUS") {
+        if v == "mysticeti_fpc" {
+            return Some(true);
+        } else if v == "mysticeti" {
+            return Some(false);
+        }
+    }
+    None
 }
 
 #[cfg(all(test, not(msim)))]

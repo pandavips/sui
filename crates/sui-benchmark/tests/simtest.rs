@@ -3,7 +3,8 @@
 
 #[cfg(msim)]
 mod test {
-    use futures::future::BoxFuture;
+    use move_core_types::runtime_value::MoveValue;
+    use rand::seq::SliceRandom;
     use rand::{distributions::uniform::SampleRange, thread_rng, Rng};
     use regex::Regex;
     use std::collections::HashSet;
@@ -36,19 +37,21 @@ mod test {
     use sui_simulator::tempfile::TempDir;
     use sui_simulator::{configs::*, SimConfig};
     use sui_storage::blob::Blob;
-    use sui_surfer::surf_strategy::{self, SurfStrategy};
+    use sui_surfer::surf_strategy::{ErrorChecks, ExitCondition, SurfStrategy};
+    use sui_surfer::surfer_state::{EntryFunction, SurferState};
     use sui_types::base_types::{ConciseableName, ObjectID, SequenceNumber};
     use sui_types::digests::TransactionDigest;
     use sui_types::full_checkpoint_content::CheckpointData;
     use sui_types::messages_checkpoint::VerifiedCheckpoint;
     use sui_types::supported_protocol_versions::SupportedProtocolVersions;
     use sui_types::transaction::{
-        DEFAULT_VALIDATOR_GAS_PRICE, TEST_ONLY_GAS_UNIT_FOR_HEAVY_COMPUTATION_STORAGE,
+        CallArg, DEFAULT_VALIDATOR_GAS_PRICE, TEST_ONLY_GAS_UNIT_FOR_HEAVY_COMPUTATION_STORAGE,
     };
-    use sui_types::{SUI_SYSTEM_PACKAGE_ID, SUI_SYSTEM_STATE_OBJECT_ID};
+    use sui_types::SUI_SYSTEM_PACKAGE_ID;
     use test_cluster::{TestCluster, TestClusterBuilder};
     use tracing::{error, info, trace};
     use typed_store::traits::Map;
+    use mysten_common::fatal;
 
     struct DeadValidator {
         node_id: sui_simulator::task::NodeId,
@@ -1043,10 +1046,10 @@ mod test {
                 .collect();
             info!("using sui_surfer test packages: {test_package_paths:?}");
 
-            let surf_strategy = SurfStrategy::new(Duration::from_millis(400));
+            let mut surf_strategy = SurfStrategy::new(Duration::from_millis(400));
+            surf_strategy.set_exit_condition(ExitCondition::Timeout(test_duration));
             let results = sui_surfer::run_with_test_cluster_and_strategy(
                 surf_strategy,
-                test_duration,
                 test_package_paths.into_iter().map(|p| p.into()).collect(),
                 None,
                 test_cluster,
@@ -1063,35 +1066,56 @@ mod test {
 
     #[sim_test]
     async fn test_sui_surfer_framework() {
-        let test_duration = Duration::from_secs(300);
-        let mut test_cluster = build_test_cluster(4, 20000).await;
+        let test_cluster = build_test_cluster(2, 20000).await;
 
         let mut surf_strategy = SurfStrategy::new(Duration::from_millis(400));
+        surf_strategy.set_exit_condition(ExitCondition::AllEntryPointsCalledSuccessfully);
+        surf_strategy.set_error_checking_mode(ErrorChecks::WellFormed);
 
-        surf_strategy.add_call_helper("sui_system::request_add_state", |state, entry_fn, args| {
-            async move {
-                // get system object
-                let system_object = state
-                    .cluster
-                    .get_object_from_fullnode_store(SUI_SYSTEM_STATE_OBJECT_ID)
-                    .await
-                    .unwrap();
-            }
-            .boxed()
-        });
-        //   "sui_system::request_add_state_non_entry",
+        surf_strategy.add_call_rewriter(
+            &[
+                "sui_system::request_add_stake",
+                "sui_system::request_add_stake_non_entry",
+            ],
+            Arc::new(
+                |state: &SurferState, _entry_fn: &EntryFunction, args: &mut Vec<CallArg>| {
+                    let validator_addresses = state.cluster.get_validator_addresses();
+                    // choose a random validator
+                    let validator = validator_addresses.choose(&mut thread_rng()).unwrap();
 
-        let results = sui_surfer::run_with_test_cluster_and_strategy(
-            surf_strategy,
-            test_duration,
-            vec![SUI_SYSTEM_PACKAGE_ID.into()],
-            Some(Regex::new("(add|remove_update).*_validator|^validator::").unwrap()),
-            test_cluster,
-            1, // skip first account for use by bench_task
+                    let validator = MoveValue::Address((*validator).into());
+
+                    args[2] = CallArg::Pure(bcs::to_bytes(&validator).unwrap());
+                    true
+                },
+            ),
+        );
+
+        let exclude_regex = "(add|remove|update).*_validator\
+                            |(^validator::)\
+                            |(^staking_pool::(fungible_staked_sui_pool_id|pool_id)$)";
+
+        let results = tokio::time::timeout(
+            Duration::from_secs(300),
+            sui_surfer::run_with_test_cluster_and_strategy(
+                surf_strategy,
+                vec![SUI_SYSTEM_PACKAGE_ID.into()],
+                Some(Regex::new(dbg!(exclude_regex)).unwrap()),
+                test_cluster,
+                1, // skip first account for use by bench_task
+            ),
         )
         .await;
-        info!("sui_surfer test complete with results: {results:?}");
-        assert!(results.num_successful_transactions > 0);
-        assert!(!results.unique_move_functions_called.is_empty());
+
+        match results {
+            Ok(results) => {
+                info!("sui_surfer test complete with results: {results:?}");
+                assert!(results.num_successful_transactions > 0);
+                assert!(!results.unique_move_functions_called.is_empty());
+            }
+            Err(e) => {
+                fatal!("sui_surfer test timed out: {e:?}");
+            }
+        }
     }
 }

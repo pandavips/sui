@@ -1,9 +1,13 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
-use futures::future::BoxFuture;
+use futures::{future::Either, Future};
 use move_binary_format::normalized::Type;
 use move_core_types::language_storage::StructTag;
 use rand::{seq::SliceRandom, Rng};
@@ -12,7 +16,7 @@ use sui_types::{
     transaction::{CallArg, ObjectArg},
 };
 use tokio::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::{error, info, warn};
 
 use crate::surfer_state::{EntryFunction, SurferState};
 
@@ -22,14 +26,39 @@ enum InputObjectPassKind {
     MutRef,
 }
 
-type CallRewriteFn = dyn for<'a> Fn(&'a SurferState, &'a EntryFunction, &'a mut Vec<CallArg>) -> BoxFuture<'a, bool>
-    + Send
-    + Sync
-    + 'static;
+type CallRewriteFn =
+    dyn Fn(&SurferState, &EntryFunction, &mut Vec<CallArg>) -> bool + Send + Sync + 'static;
+
+#[derive(Default, Debug, Clone, Copy)]
+pub enum ErrorChecks {
+    /// No error checking at all
+    #[default]
+    None,
+    /// Transactions must be well-formed, but can abort at execution time.
+    WellFormed,
+    /// Transactions must exit with a success status.
+    Strict,
+}
+
+#[derive(Debug, Clone)]
+pub enum ExitCondition {
+    Timeout(Duration),
+    AllEntryPointsCalledSuccessfully,
+}
+
+impl Default for ExitCondition {
+    fn default() -> Self {
+        Self::Timeout(Duration::from_secs(60))
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct SurfStrategy {
     min_tx_interval: Duration,
+
+    exit_condition: ExitCondition,
+
+    error_checking_mode: ErrorChecks,
 
     // Function call helpers, which, given a function name (specified as 'module::func'),
     // can re-write the arguments after sui surfer has chosen them. Can return false to
@@ -41,13 +70,64 @@ impl SurfStrategy {
     pub fn new(min_tx_interval: Duration) -> Self {
         Self {
             min_tx_interval,
+            exit_condition: ExitCondition::Timeout(Duration::from_secs(60)),
+            error_checking_mode: ErrorChecks::None,
             call_rewriters: HashMap::new(),
         }
     }
 
-    pub fn add_call_rewriter(&mut self, function_name: &str, rewriter: Arc<CallRewriteFn>) {
-        self.call_rewriters
-            .insert(function_name.to_string(), rewriter);
+    pub fn set_exit_condition(&mut self, condition: ExitCondition) {
+        self.exit_condition = condition;
+    }
+
+    pub fn set_error_checking_mode(&mut self, mode: ErrorChecks) {
+        self.error_checking_mode = mode;
+    }
+
+    pub fn add_call_rewriter(&mut self, function_name: &[&str], rewriter: Arc<CallRewriteFn>) {
+        for function_name in function_name {
+            self.call_rewriters
+                .insert(function_name.to_string(), rewriter.clone());
+        }
+    }
+
+    pub fn finished(&self, state: &SurferState) -> impl Future<Output = ()> + 'static {
+        match self.exit_condition {
+            ExitCondition::Timeout(duration) => Either::Left(tokio::time::sleep(duration)),
+            ExitCondition::AllEntryPointsCalledSuccessfully => {
+                let mut stats_rx = state.stats.subscribe();
+                let remaining_entry_functions: Arc<Mutex<BTreeSet<_>>> = Arc::new(Mutex::new(
+                    state.entry_functions.read().iter().cloned().collect(),
+                ));
+
+                Either::Right(async move {
+                    // If we exit early (due to a timeout higher up the stack) log the missing functions
+                    let _guard = scopeguard::guard((), |_| {
+                        let remaining_entry_functions = remaining_entry_functions.lock().unwrap();
+                        if remaining_entry_functions.len() > 0 {
+                            error!(
+                                "The following entry functions were not called: {:?}",
+                                remaining_entry_functions
+                            );
+                        }
+                    });
+
+                    loop {
+                        stats_rx.changed().await.unwrap();
+                        let stats = stats_rx.borrow_and_update();
+                        let mut remaining_entry_functions =
+                            remaining_entry_functions.lock().unwrap();
+                        remaining_entry_functions.retain(|func| {
+                            let key = (func.package, func.module.clone(), func.function.clone());
+                            !stats.unique_move_functions_called_success.contains(&key)
+                        });
+                        if remaining_entry_functions.is_empty() {
+                            break;
+                        }
+                    }
+                })
+            }
+        }
     }
 
     /// Given a state and a list of callable Move entry functions,
@@ -74,13 +154,15 @@ impl SurfStrategy {
 
             let name = entry.qualified_name();
             if let Some(helper) = self.call_rewriters.get(&name) {
-                if !helper(state, &entry, &mut args).await {
+                if !helper(state, &entry, &mut args) {
                     info!("Skipping call to function due to helper: {}", name);
                     continue;
                 }
             }
 
-            state.execute_move_transaction(&entry, args).await;
+            state
+                .execute_move_transaction(&entry, args, self.error_checking_mode)
+                .await;
             tokio::time::sleep_until(next_tx_time).await;
         }
     }

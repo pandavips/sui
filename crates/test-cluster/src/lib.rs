@@ -191,6 +191,13 @@ impl TestCluster {
         self.swarm.active_validators().map(|v| v.name()).collect()
     }
 
+    pub fn get_validator_addresses(&self) -> Vec<SuiAddress> {
+        self.swarm
+            .active_validators()
+            .map(|v| v.sui_address())
+            .collect()
+    }
+
     pub fn get_genesis(&self) -> Genesis {
         self.swarm.config().genesis.clone()
     }
@@ -250,6 +257,13 @@ impl TestCluster {
             .sui_node
             .with_async(|node| async { node.state().get_object(object_id).await.unwrap() })
             .await
+    }
+
+    /// Get the current SuiSystemState object from the fullnode store.
+    pub fn get_system_object_from_fullnode_store(&self) -> SuiResult<SuiSystemState> {
+        self.fullnode_handle
+            .sui_node
+            .with(|node| node.state().get_sui_system_state_object_for_testing())
     }
 
     pub async fn get_latest_object_ref(&self, object_id: &ObjectID) -> ObjectRef {

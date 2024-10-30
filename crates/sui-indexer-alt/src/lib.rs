@@ -179,6 +179,7 @@ impl Indexer {
         let (checkpoint_rx, watermark_tx) = self.ingestion_service.subscribe();
 
         let (processor, committer) = sequential::pipeline::<H>(
+            self.first_checkpoint,
             watermark,
             self.pipeline_config.clone(),
             self.db.clone(),
@@ -207,9 +208,20 @@ impl Indexer {
 
         // If an override has been provided, start ingestion from there, otherwise start ingestion
         // from just after the lowest committer watermark across all enabled pipelines.
-        let first_checkpoint = self
-            .first_checkpoint
-            .unwrap_or(self.first_checkpoint_from_watermark);
+        let first_checkpoint = match self.first_checkpoint {
+            Some(first_checkpoint) => {
+                if first_checkpoint > self.first_checkpoint_from_watermark {
+                    return Err(anyhow::anyhow!(
+                        "First checkpoint {} is larger than the expected first checkpoint from watermark {}.\
+                        This will create gaps in the data.",
+                        first_checkpoint,
+                        self.first_checkpoint_from_watermark
+                    ));
+                }
+                first_checkpoint
+            }
+            None => self.first_checkpoint_from_watermark,
+        };
 
         let last_checkpoint = self.last_checkpoint.unwrap_or(u64::MAX);
 

@@ -17,7 +17,7 @@ use crate::{
     db::Db,
     metrics::IndexerMetrics,
     models::watermarks::CommitterWatermark,
-    pipeline::{Indexed, PipelineConfig, LOUD_WATERMARK_UPDATE_INTERVAL, WARN_PENDING_WATERMARKS},
+    pipeline::{Indexed, PipelineConfig, LOUD_PROGRESS_UPDATE_INTERVAL, WARN_PENDING_WATERMARKS},
 };
 
 use super::Handler;
@@ -39,6 +39,7 @@ use super::Handler;
 /// The task can be shutdown using its `cancel` token or if either of its channels are closed.
 pub(super) fn committer<H: Handler + 'static>(
     config: PipelineConfig,
+    first_checkpoint: Option<i64>,
     watermark: Option<CommitterWatermark<'static>>,
     mut rx: mpsc::Receiver<Indexed<H>>,
     tx: mpsc::UnboundedSender<(&'static str, u64)>,
@@ -64,28 +65,40 @@ pub(super) fn committer<H: Handler + 'static>(
         let mut batch_rows = 0;
         let mut batch_checkpoints = 0;
 
+        // Whether we need to tell the ingestion service that progress has been made
+        // and data up to a checkpoint has been committed.
+        let mut should_notify_ingestion = false;
+
         // The task keeps track of the highest (inclusive) checkpoint it has added to the batch,
         // and whether that batch needs to be written out. By extension it also knows the next
         // checkpoint to expect and add to the batch.
-        let mut watermark_needs_update = false;
+        // In the case that first_checkpoint is overridden, we start committing from the first checkpoint.
+        // That is, watermark can be much further than next_checkpoint.
         let (mut watermark, mut next_checkpoint) = if let Some(watermark) = watermark {
-            let next = watermark.checkpoint_hi_inclusive + 1;
+            let next = first_checkpoint.unwrap_or_else(|| watermark.checkpoint_hi_inclusive + 1);
+            // The pipeline registration process ensures this.
+            assert!(next <= watermark.checkpoint_hi_inclusive + 1);
             (watermark, next)
         } else {
+            assert_eq!(first_checkpoint.unwrap_or_default(), 0);
             (CommitterWatermark::initial(H::NAME.into()), 0)
         };
 
         // The committer task will periodically output a log message at a higher log level to
         // demonstrate that the pipeline is making progress.
-        let mut next_loud_watermark_update =
-            watermark.checkpoint_hi_inclusive + LOUD_WATERMARK_UPDATE_INTERVAL;
+        let mut next_loud_progress_update = next_checkpoint + LOUD_PROGRESS_UPDATE_INTERVAL;
 
         // Data for checkpoint that haven't been written yet. Note that `pending_rows` includes
         // rows in `batch`.
         let mut pending: BTreeMap<u64, Indexed<H>> = BTreeMap::new();
         let mut pending_rows = 0;
 
-        info!(pipeline = H::NAME, ?watermark, "Starting committer");
+        info!(
+            pipeline = H::NAME,
+            ?watermark,
+            ?next_checkpoint,
+            "Starting committer"
+        );
 
         loop {
             tokio::select! {
@@ -135,8 +148,12 @@ pub(super) fn committer<H: Handler + 'static>(
                                 batch_rows += indexed.len();
                                 batch_checkpoints += 1;
                                 H::batch(&mut batch, indexed.values);
-                                watermark = indexed.watermark;
-                                watermark_needs_update = true;
+                                if next_checkpoint == watermark.checkpoint_hi_inclusive + 1 {
+                                    // What we included in the batch is also the next checkpoint
+                                    // according to the watermark, update the watermark.
+                                    watermark = indexed.watermark;
+                                }
+                                should_notify_ingestion = true;
                                 next_checkpoint += 1;
                             }
 
@@ -250,13 +267,14 @@ pub(super) fn committer<H: Handler + 'static>(
                         .with_label_values(&[H::NAME])
                         .set(watermark.tx_hi);
 
-                    if watermark.checkpoint_hi_inclusive > next_loud_watermark_update {
-                        next_loud_watermark_update += LOUD_WATERMARK_UPDATE_INTERVAL;
+                    if next_checkpoint > next_loud_progress_update {
+                        next_loud_progress_update += LOUD_PROGRESS_UPDATE_INTERVAL;
                         info!(
                             pipeline = H::NAME,
                             epoch = watermark.epoch_hi_inclusive,
                             checkpoint = watermark.checkpoint_hi_inclusive,
                             transaction = watermark.tx_hi,
+                            ?next_checkpoint,
                             "Watermark",
                         );
                     } else {
@@ -265,19 +283,20 @@ pub(super) fn committer<H: Handler + 'static>(
                             epoch = watermark.epoch_hi_inclusive,
                             checkpoint = watermark.checkpoint_hi_inclusive,
                             transaction = watermark.tx_hi,
+                            ?next_checkpoint,
                             "Watermark",
                         );
                     }
 
-                    if watermark_needs_update {
+                    if should_notify_ingestion {
                         // Ignore the result -- the ingestion service will close this channel
                         // once it is done, but there may still be checkpoints buffered that need
                         // processing.
-                        let _ = tx.send((H::NAME, watermark.checkpoint_hi_inclusive as u64));
+                        let _ = tx.send((H::NAME, next_checkpoint as u64 - 1));
                     }
 
                     let _ = std::mem::take(&mut batch);
-                    watermark_needs_update = false;
+                    should_notify_ingestion = false;
                     pending_rows -= batch_rows;
                     batch_checkpoints = 0;
                     batch_rows = 0;

@@ -21,7 +21,7 @@ use crate::{
     metrics::IndexerMetrics,
     models::watermarks::CommitterWatermark,
     pipeline::{
-        PipelineConfig, WatermarkPart, LOUD_WATERMARK_UPDATE_INTERVAL, WARN_PENDING_WATERMARKS,
+        PipelineConfig, WatermarkPart, LOUD_PROGRESS_UPDATE_INTERVAL, WARN_PENDING_WATERMARKS,
     },
 };
 
@@ -42,7 +42,7 @@ use super::Handler;
 /// to run the indexer with watermarking disabled (e.g. if they are running a backfill).
 ///
 /// The task regularly traces its progress, outputting at a higher log level every
-/// [LOUD_WATERMARK_UPDATE_INTERVAL]-many checkpoints.
+/// [LOUD_PROGRESS_UPDATE_INTERVAL]-many checkpoints.
 ///
 /// The task will shutdown if the `cancel` token is signalled, or if the `rx` channel closes and
 /// the watermark cannot be progressed. If the `config` specifies `skip_watermark`, the task will
@@ -80,7 +80,7 @@ pub(super) fn watermark<H: Handler + 'static>(
         // The watermark task will periodically output a log message at a higher log level to
         // demonstrate that the pipeline is making progress.
         let mut next_loud_watermark_update =
-            watermark.checkpoint_hi_inclusive + LOUD_WATERMARK_UPDATE_INTERVAL;
+            watermark.checkpoint_hi_inclusive + LOUD_PROGRESS_UPDATE_INTERVAL;
 
         info!(pipeline = H::NAME, ?watermark, "Starting watermark");
 
@@ -213,7 +213,7 @@ pub(super) fn watermark<H: Handler + 'static>(
                                 }
 
                                 if watermark.checkpoint_hi_inclusive > next_loud_watermark_update {
-                                    next_loud_watermark_update += LOUD_WATERMARK_UPDATE_INTERVAL;
+                                    next_loud_watermark_update += LOUD_PROGRESS_UPDATE_INTERVAL;
                                     info!(
                                         pipeline = H::NAME,
                                         elapsed_ms = elapsed * 1000.0,

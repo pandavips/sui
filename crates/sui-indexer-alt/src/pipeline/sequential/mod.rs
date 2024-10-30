@@ -83,6 +83,7 @@ pub trait Handler: Processor {
 /// shutdown using its `cancel` token, and will also shutdown if any of its input or output
 /// channels close, or any of its independent tasks fail.
 pub(crate) fn pipeline<H: Handler + 'static>(
+    first_checkpoint: Option<u64>,
     initial_watermark: Option<CommitterWatermark<'static>>,
     config: PipelineConfig,
     db: Db,
@@ -97,6 +98,7 @@ pub(crate) fn pipeline<H: Handler + 'static>(
 
     let committer = committer::<H>(
         config.clone(),
+        first_checkpoint.map(|c| c as i64),
         initial_watermark,
         committer_rx,
         watermark_tx,

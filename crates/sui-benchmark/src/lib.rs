@@ -45,7 +45,7 @@ use sui_types::{
     sui_system_state::SuiSystemStateTrait,
 };
 use tokio::time::sleep;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub mod bank;
 pub mod benchmark_setup;
@@ -375,28 +375,17 @@ impl ValidatorProxy for LocalValidatorAggregatorProxy {
                         events,
                         ..
                     } = resp;
-                    error!(
-                        ?tx_digest,
-                        retry_cnt,
-                        "Transaction succeeded",
-                    );
                     return Ok(ExecutionEffects::FinalizedTransactionEffects(
                         FinalizedEffects::new_from_effects_cert(effects_cert.into()),
                         events.unwrap_or_default(),
                     ));
                 }
                 Err(QuorumDriverError::NonRecoverableTransactionError { errors }) => {
-                    error!(
-                        ?tx_digest,
-                        retry_cnt,
-                        "Transaction failed with non-recoverable err: {:?}",
-                        errors
-                    );
                     bail!(QuorumDriverError::NonRecoverableTransactionError { errors });
                 }
                 Err(err) => {
                     let delay = Duration::from_millis(rand::thread_rng().gen_range(100..1000));
-                    error!(
+                    warn!(
                         ?tx_digest,
                         retry_cnt,
                         "Transaction failed with err: {:?}. Sleeping for {:?} ...",

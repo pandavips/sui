@@ -823,7 +823,7 @@ impl ValidatorService {
                     ConsensusTransactionKind::CertifiedTransaction(certificate) => {
                         // Certificates already verified by callers of this function.
                         let certificate = VerifiedCertificate::new_unchecked(*(certificate.clone()));
-                         self.state
+                        self.state
                             .execute_certificate(&certificate, epoch_store)
                             .await?
                     }

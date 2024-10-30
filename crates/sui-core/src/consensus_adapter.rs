@@ -341,6 +341,10 @@ impl ConsensusAdapter {
                 ConsensusTransactionKind::CertifiedTransaction(certificate) => {
                     Some(certificate.digest())
                 }
+                // TODO(fastpath): support batch of UserTransaction.
+                ConsensusTransactionKind::UserTransaction(transaction) => {
+                    Some(transaction.digest())
+                }
                 _ => None,
             })
             .min();
@@ -563,6 +567,7 @@ impl ConsensusAdapter {
                     ),
                     SuiError::InvalidTxKindInSoftBundle
                 );
+                // TODO(fastpath): support batch of UserTransaction.
             }
         }
 
@@ -804,6 +809,10 @@ impl ConsensusAdapter {
             || matches!(
                 transactions[0].kind,
                 ConsensusTransactionKind::CertifiedTransaction(_)
+            )
+            || matches!(
+                transactions[0].kind,
+                ConsensusTransactionKind::UserTransaction(_)
             );
         let send_end_of_publish = if is_user_tx {
             // If we are in RejectUserCerts state and we just drained the list we need to
@@ -855,9 +864,6 @@ impl ConsensusAdapter {
             let transaction_digests = match transaction_key {
                 SequencedConsensusTransactionKey::External(
                     ConsensusTransactionKey::Certificate(digest),
-                )
-                | SequencedConsensusTransactionKey::External(
-                    ConsensusTransactionKey::UserTransaction(digest),
                 ) => vec![digest],
                 _ => vec![],
             };

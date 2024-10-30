@@ -796,16 +796,24 @@ impl AuthorityEpochTables {
 
         let shared_input_object_ids: BTreeSet<_> = transactions
             .iter()
-            .filter_map(|tx| {
-                if let SequencedConsensusTransactionKind::External(ConsensusTransaction {
+            .filter_map(|tx| match &tx.0.transaction {
+                SequencedConsensusTransactionKind::External(ConsensusTransaction {
                     kind: ConsensusTransactionKind::CertifiedTransaction(tx),
                     ..
-                }) = &tx.0.transaction
-                {
-                    Some(tx.shared_input_objects().map(|obj| obj.id))
-                } else {
-                    None
-                }
+                }) => Some(
+                    tx.shared_input_objects()
+                        .map(|obj| obj.id)
+                        .collect::<Vec<_>>(),
+                ),
+                SequencedConsensusTransactionKind::External(ConsensusTransaction {
+                    kind: ConsensusTransactionKind::UserTransaction(tx),
+                    ..
+                }) => Some(
+                    tx.shared_input_objects()
+                        .map(|obj| obj.id)
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
             })
             .flatten()
             .collect();
@@ -859,14 +867,12 @@ impl AuthorityPerEpochStore {
         let pending_consensus_transactions = tables.get_all_pending_consensus_transactions();
         let pending_consensus_certificates: HashSet<_> = pending_consensus_transactions
             .iter()
-            .filter_map(|transaction| {
-                if let ConsensusTransactionKind::CertifiedTransaction(certificate) =
-                    &transaction.kind
-                {
+            .filter_map(|transaction| match &transaction.kind {
+                ConsensusTransactionKind::CertifiedTransaction(certificate) => {
                     Some(*certificate.digest())
-                } else {
-                    None
                 }
+                ConsensusTransactionKind::UserTransaction(txn) => Some(*txn.digest()),
+                _ => None,
             })
             .collect();
         assert_eq!(
@@ -1792,9 +1798,6 @@ impl AuthorityPerEpochStore {
                 txs.iter().map(|tx| match tx.0.transaction.key() {
                     SequencedConsensusTransactionKey::External(
                         ConsensusTransactionKey::Certificate(digest),
-                    )
-                    | SequencedConsensusTransactionKey::External(
-                        ConsensusTransactionKey::UserTransaction(digest),
                     ) => (digest, *deferral_key),
                     _ => {
                         panic!("deferred randomness transaction was not a user certificate: {tx:?}")
@@ -1979,13 +1982,10 @@ impl AuthorityPerEpochStore {
         self.tables()?
             .pending_consensus_transactions
             .multi_remove(keys)?;
-        // TODO: lock once for all remove() calls.
+        let mut pending_consensus_certificates = self.pending_consensus_certificates.write();
         for key in keys {
             if let ConsensusTransactionKey::Certificate(digest) = key {
-                self.pending_consensus_certificates.write().remove(digest);
-            }
-            if let ConsensusTransactionKey::UserTransaction(digest) = key {
-                self.pending_consensus_certificates.write().remove(digest);
+                pending_consensus_certificates.remove(digest);
             }
         }
         Ok(())
@@ -2738,9 +2738,6 @@ impl AuthorityPerEpochStore {
                     txs.iter().map(|tx| match tx.0.transaction.key() {
                         SequencedConsensusTransactionKey::External(
                             ConsensusTransactionKey::Certificate(digest),
-                        )
-                        | SequencedConsensusTransactionKey::External(
-                            ConsensusTransactionKey::UserTransaction(digest),
                         ) => (digest, *deferral_key),
                         _ => panic!("deferred transaction was not a user certificate: {tx:?}"),
                     })

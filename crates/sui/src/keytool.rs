@@ -39,6 +39,7 @@ use sui_keys::keypair_file::{
     write_keypair_to_file,
 };
 use sui_keys::keystore::{AccountKeystore, Keystore};
+use sui_types::attestation::attestation_verify_inner;
 use sui_types::base_types::SuiAddress;
 use sui_types::committee::EpochId;
 use sui_types::crypto::{
@@ -291,6 +292,14 @@ pub enum KeyToolCommand {
         #[clap(long)]
         max_epoch: EpochId,
     },
+    VerifyAttestation {
+        /// The Base64 encoded string of the attestation to verify.
+        #[clap(long)]
+        attestation: String,
+        /// The public key booted on enclave.
+        #[clap(long)]
+        pk: String,
+    },
 }
 
 // Command Output types
@@ -442,6 +451,12 @@ pub struct ZkLoginSigVerifyResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct VerifyAttestationResponse {
+    res: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ZkLoginInsecureSignPersonalMessage {
     sig: String,
     bytes: String,
@@ -471,6 +486,7 @@ pub enum CommandOutput {
     ZkLoginSignAndExecuteTx(ZkLoginSignAndExecuteTx),
     ZkLoginInsecureSignPersonalMessage(ZkLoginInsecureSignPersonalMessage),
     ZkLoginSigVerify(ZkLoginSigVerifyResponse),
+    VerifyAttestation(VerifyAttestationResponse),
 }
 
 impl KeyToolCommand {
@@ -1270,6 +1286,14 @@ impl KeyToolCommand {
                     }
                     _ => CommandOutput::Error("Not a zkLogin signature".to_string()),
                 }
+            }
+            KeyToolCommand::VerifyAttestation { attestation, pk } => {
+                let res = attestation_verify_inner(
+                    &Hex::decode(&attestation).unwrap(),
+                    &Base64::decode(&pk).unwrap(),
+                )
+                .is_ok();
+                CommandOutput::VerifyAttestation(VerifyAttestationResponse { res })
             }
         });
 

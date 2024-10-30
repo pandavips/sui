@@ -78,6 +78,13 @@ lru.workspace = true
 
 sui-sdk-types.workspace = true
 
+boring-signal.workspace = true
+ciborium.workspace = true
+prost.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+hex-literal.workspace = true
+
 [dev-dependencies]
 bincode.workspace = true
 criterion.workspace = true

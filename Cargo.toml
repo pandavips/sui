@@ -590,6 +590,11 @@ passkey-authenticator = { version = "0.2.0" }
 coset = "0.3"
 p256 = { version = "0.13.2", features = ["ecdsa"] }
 
+boring-signal = { git = "https://github.com/signalapp/boring", tag = "signal-v4.9.0b", package = "boring", default-features = false }
+ciborium = "0.2"
+sha2 = "0.10"
+subtle = "2.5.0"
+
 # anemo dependencies
 anemo = { git = "https://github.com/mystenlabs/anemo.git", rev = "e609f7697ed6169bf0760882a0b6c032a57e4f3b" }
 anemo-build = { git = "https://github.com/mystenlabs/anemo.git", rev = "e609f7697ed6169bf0760882a0b6c032a57e4f3b" }

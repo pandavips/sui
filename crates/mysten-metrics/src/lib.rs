@@ -15,8 +15,8 @@ use std::time::Instant;
 
 use once_cell::sync::OnceCell;
 use prometheus::{
-    register_histogram_with_registry, register_int_gauge_vec_with_registry, Histogram, IntGaugeVec,
-    Registry, TextEncoder,
+    register_histogram_with_registry, register_int_gauge_vec_with_registry, Histogram, IntCounter,
+    IntGaugeVec, Registry, TextEncoder,
 };
 use tap::TapFallible;
 use tracing::{warn, Span};
@@ -69,6 +69,7 @@ pub struct Metrics {
     pub scope_duration_ns: IntGaugeVec,
     pub scope_entrance: IntGaugeVec,
     pub thread_stall_duration_sec: Histogram,
+    pub system_invariant_violations: IntCounter,
 }
 
 impl Metrics {
@@ -143,6 +144,10 @@ impl Metrics {
                 registry,
             )
             .unwrap(),
+            system_invariant_violations: IntCounter::new(
+                "system_invariant_violations",
+                "Number of system invariant violations",
+            ).unwrap(),
         }
     }
 }
@@ -628,6 +633,20 @@ pub async fn metrics(
             format!("unable to encode metrics: {error}"),
         ),
     }
+}
+
+#[macro_export]
+macro_rules! system_invariant_violation {
+    ($msg:expr) => {
+        if cfg!(debug_assertions) {
+            panic!("System Invariant Violation: {}", $msg);
+        } else {
+            if let Some(metrics) = $crate::get_metrics() {
+                metrics.system_invariant_violations.inc();
+            }
+            error!("System Invariant Violation: {}", $msg);
+        }
+    };
 }
 
 #[cfg(test)]

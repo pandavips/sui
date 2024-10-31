@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["CheckpointContents","CheckpointSummary","CheckpointTransaction","FullCheckpoint","GetCheckpointResponse","GetObjectResponse","GetTransactionResponse","ListCheckpointResponse","ListTransactionsResponse","Object","Transaction","TransactionEffects","TransactionEvents","UserSignature","ValidatorAggregatedSignature"]};
